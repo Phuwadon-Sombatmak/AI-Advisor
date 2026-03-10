@@ -1,0 +1,182 @@
+.register-container {
+  display: flex;
+  flex-direction: column; /* ✅ จัดแนวตั้ง */
+  align-items: center;
+  font-family: "Prompt", sans-serif;
+  overflow: hidden;
+}
+
+.logo-register {
+  width: 250px;  /* จากเดิม ~150px ลดลง */
+  height: auto;
+  object-fit: contain;
+  opacity: 0.95;
+  margin-bottom: 30px;
+  margin-top: -20px; 
+}
+
+.register-form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;      /* ✅ จัดให้อยู่ตรงกลางแนวนอน */
+  justify-content: center;  /* ✅ จัดให้อยู่ตรงกลางแนวตั้ง */
+  width: 60%;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #47a6ff, #f8fafc);
+  font-family: "Prompt", sans-serif;
+  padding: 20px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
+}
+
+.register-form h3 {
+  font-size: 1.8rem;
+  color: #1e293b;
+  margin-bottom: 1.5rem;
+}
+
+.register-form input {
+  width: 100%;
+  padding: 12px 14px;
+  margin: 8px 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 1rem;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.register-form input:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(14, 123, 247, 0.2);
+}
+
+.dob-select{
+  display: flex;
+  gap: 8px; /* ช่องว่างระหว่าง dropdown */
+  margin-bottom: 16px;
+}
+
+.dob-select select {
+  flex: 1; /* ให้แต่ละ select ขยายเท่ากัน */
+  padding: 10px 12px;
+  font-size: 14px;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  background-color: #fff;
+  outline: none;
+  transition: border 0.2s ease;
+}
+
+.dob-select select:hover,
+.dob-select select:focus {
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 3px rgba(14, 123, 247, 0.2);
+}
+
+.dob-select select option:first-child {
+  color: #999;
+}
+
+/* ปุ่มสมัคร */
+.btn-register {
+  width: 100%;
+  padding: 12px;
+  margin-top: 14px;
+  border: none;
+  background: #1e3a8a;
+  color: white;
+  font-size: 1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.3s ease;
+}
+
+.btn-register:hover {
+  background: #026dc4;
+}
+
+/* Error text */
+.error {
+  color: #ef4444;
+  font-size: 0.9rem;
+  margin-top: 8px;
+}
+
+/* ลิงก์กลับไปหน้า Login */
+.goto-login {
+  display: block;
+  margin-left: 20px;
+  margin-top: 1rem;
+  color: #2563eb;
+  cursor: pointer;
+  font-size: 0.95rem;
+  transition: color 0.3s ease;
+}
+
+.goto-login:hover {
+  color: #1d4ed8;
+}
+
+/* ปุ่ม Show/Hide password */
+.password-wrapper {
+  position: relative;
+  text-align: right;
+  margin-bottom: 0.5rem;
+}
+
+.toggle-password {
+  background: none;
+  border: none;
+  color: #6366f1;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.toggle-password:hover {
+  color: #4338ca;
+}
+
+.dob-select{
+  margin-bottom: 3px;
+  margin-left: 15px;
+}
+
+/* ✅ Responsive (มือถือ) */
+@media (max-width: 768px) {
+  .register-container {
+    padding: 1rem;
+  }
+
+  .register-form {
+    box-shadow: none;
+    background: white;
+    padding: 1.5rem;
+  }
+
+  .logo-img {
+    width: 70px;
+  }
+}
+
+.password-strength {
+  margin-top: 5px;
+}
+
+.strength-bar {
+  height: 5px;
+  border-radius: 4px;
+  margin-bottom: 3px;
+  transition: width 0.3s ease, background-color 0.3s ease;
+}
+.password-strength .strength-bar {
+  margin-left: 14px;
+  height: 6px;
+  border-radius: 4px;
+}
+
+.bot-field {
+  display: none;
+  visibility: hidden;
+}
+

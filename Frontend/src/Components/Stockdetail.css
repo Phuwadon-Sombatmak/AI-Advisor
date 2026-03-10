@@ -1,0 +1,363 @@
+/* StockDetail.css */
+.stock-header {
+  width: 100%;          /* เต็มความกว้าง */
+  padding-left: 0;      /* เอา padding ด้านซ้ายออก */
+  text-align: left;     /* ชิดซ้าย */
+  margin-left: 0;       /* เอา margin ด้านซ้ายออก */
+  margin-bottom: 1rem;  /* เว้นระยะด้านล่าง */
+  z-index: 9999;
+}
+
+/* สำหรับชื่อหุ้น */
+.stock-header h1 {
+  font-size: 2rem;      /* ขนาดตัวอักษร */
+  font-weight: bold;
+  margin: 0;            /* ล้าง margin */
+}
+
+/* สำหรับราคาล่าสุด */
+.stock-header p {
+  font-size: 1.25rem;
+  color: #16a34a;       /* สีเขียว */
+  margin: 0.25rem 0 0 0; /* เว้นระยะเล็กน้อยด้านบน */
+}
+
+.ai-recommendation-card {
+  width: 100%;
+  min-height: 160px;
+  background: #414141;
+  border-radius: 16px;
+  border: "1px solid #eee";
+   padding: 20px;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.ai-recommendation-header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.ai-recommendation-header h3 {
+  margin: 0;
+  font-weight: 700;
+  font-size: 18px;
+  transition: color 0.3s ease;
+}
+
+.status.loading {
+  color: #6b7280;
+}
+
+.status.error {
+  color: #b91c1c;
+}
+
+.ai-recommendation-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.info-card {
+  border: 1px solid;
+  border-radius: 12px;
+  padding: 12px;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+.label {
+  font-size: 14px;
+  color: #6b7280;
+}
+
+.value {
+  font-weight: 800;
+  font-size: 20px;
+  margin-top: 4px;
+}
+
+.subtext {
+  color: #6b7280;
+  margin-top: 6px;
+  font-size: 14px;
+}
+
+/* ✅ Light Theme */
+body.light .ai-recommendation-card {
+  background-color: #f1f1f1;
+  color: #111827;
+}
+
+body.light .info-card {
+  background-color: #ffffff;
+  border-color: #a7a8ac;
+}
+
+body.light .label,
+body.light .subtext {
+  color: #6b7280;
+}
+
+body.light .status.loading {
+  color: #44464b;
+}
+
+body.light .status.error {
+  color: #b91c1c;
+}
+
+/* ✅ Dark Theme */
+body.dark .ai-recommendation-card {
+  background-color: #26292c;
+  color: #ffffff;
+}
+
+body.dark .info-card {
+  background-color: #374151;
+  border-color: #868788;
+}
+
+body.dark .label,
+body.dark .subtext {
+  color: #d9e0eb;
+}
+
+body.dark .status.loading {
+  color: #c6cdd8;
+}
+
+body.dark .status.error {
+  color: #f87171;
+}
+
+
+.filter-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 1.5rem;
+}
+
+.filter-btn {
+  display: flex;
+  align-items: center;
+  margin-top: 10px;
+  gap: 8px;
+  padding: 10px 24px;
+  border: 2px solid #ccc;
+  border-radius: 24px; /* มุมโค้ง */
+  background-color: white;
+  color: #333;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+/* ไอคอนในปุ่ม */
+.filter-btn .icon {
+  display: flex;
+  align-items: center;
+  font-size: 15px;
+  transition: all 0.3s ease;
+}
+
+/* Hover effect */
+.filter-btn:hover {
+  background-color: #dddddd;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+/* Active state */
+.filter-btn.active {
+  border: transparent;
+  color: white;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+}
+
+/* Active ทำให้ไอคอนเด่น */
+.filter-btn.active .icon {
+  transform: scale(1.5); /* ขยายใหญ่ขึ้น */
+  color: #fff; /* สีไอคอนขาว */
+  text-shadow: 0 2px 4px rgba(0,0,0,0.3); /* เพิ่มเงา */
+}
+
+/* สีสำหรับแต่ละปุ่ม */
+.filter-btn.active:nth-child(1) { background-color: #2563eb; } /* All - Blue */
+.filter-btn.active:nth-child(2) { background-color: #16a34a; } /* Bullish - Green */
+.filter-btn.active:nth-child(3) { background-color: #dc2626; } /* Bearish - Red */
+
+.news-card {
+  display: flex;
+  flex-direction: row; /* รูปซ้าย เนื้อหาขวา */
+  align-items: flex-start;
+  background: var(--card-bg, #fff);
+  transition: transform 0.2s ease, box-shadow 0.3s ease;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.news-card:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+}
+
+.news-image-wrapper {
+  flex-shrink: 0;
+  border-right: 2px solid #797979; /* เส้นคั่นระหว่างรูปกับเนื้อหา */
+}
+
+.news-image {
+  width: 120px;
+  height: 160px;
+  object-fit: cover;
+}
+
+.news-content {
+  flex: 1;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.news-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 4px;
+  line-height: 1.5;
+}
+
+.dark .news-title {
+  color: #f9fafb;
+}
+
+.news-meta {
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.news-sentiment {
+  font-size: 0.9rem;
+  font-weight: 500;
+  margin-top: 8px;
+}
+
+.news-sentiment.positive {
+  color: #22c55e;
+}
+
+.news-sentiment.negative {
+  color: #ef4444;
+}
+
+.news-sentiment.neutral {
+  color: #9ca3af;
+}
+
+.news-badge {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.news-bullish {
+  background: rgba(34,197,94,0.15);
+  color: #22c55e;
+}
+
+.news-bearish {
+  background: rgba(239,68,68,0.15);
+  color: #ef4444;
+}
+
+.news-neutral {
+  background: rgba(156,163,175,0.15);
+  color: #9ca3af;
+}
+
+.news-link {
+  color: #2563eb;
+  font-size: 0.9rem;
+  font-weight: 500;
+  margin-top: 10px;
+  align-self: flex-start;
+  text-decoration: none;
+}
+
+.news-link:hover {
+  text-decoration: underline;
+}
+
+.favorite-star {
+  font-size: 1.5rem; /* ขนาดใหญ่ */
+  color: gray; /* สีดาวปกติ */
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.2s, color 0.2s, text-shadow 0.2s;
+}
+
+.favorite-star:hover {
+  color: #fcd34d; /* สีเหลืองอ่อนเวลาหย hover */
+  transform: scale(1.2);
+}
+
+.favorite-star.active {
+  color: #facc15; /* สีเหลืองทองเมื่อ active */
+  transform: scale(1.3); /* ขยายเล็กน้อยเมื่อ active */
+}
+
+.back-button {
+  position: static;
+  display: flex;
+  margin-top: 60px;
+  justify-content: flex-start;
+}
+
+.back-btn {
+  position: static;
+  background: #fff;
+  border: 1px solid #ccc;
+  padding: 10px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.back-btn:hover {
+  background: #f3f3f3;
+}
+
+.reco-card {
+  background-color: var(--card-bg, #fff);
+  border: 1px solid var(--card-border, #eee);
+}
+
+body.light.reco-card {
+  background-color: white;
+  color: black;
+}
+
+body.dark.reco-card {
+  background-color: black;
+  color: white;
+}
+
+.reco-card-item {
+  border: 1px solid var(--card-border, #eee);
+}
+
+/* Fade-in เมื่อกราฟปรากฏ */
+.chart-fade-in {
+  animation: fadeIn 0.5s ease-out forwards;
+  opacity: 0;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}

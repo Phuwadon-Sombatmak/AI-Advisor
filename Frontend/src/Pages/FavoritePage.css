@@ -1,0 +1,133 @@
+.favorite-page {
+  max-width: 800px;
+  margin: 40px auto;
+  min-height: 100vh;
+  margin-top: 30px;
+  padding: 20px;
+  font-family: "Inter", sans-serif;
+  color: #000;
+}
+
+body.dark .favorite-page {
+  color: #fff;
+}
+
+.favorite-card-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.favorite-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 16px;
+  padding: 16px;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  border: 2px solid #ddd;
+}
+
+.favorite-card-link {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  text-decoration: none;
+  color: inherit;
+}
+
+.favorite-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+}
+
+body.dark .favorite-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 20px rgba(212, 212, 212, 0.15);
+}
+
+.favorite-card-left {
+  flex-shrink: 0;
+}
+
+.favorite-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.favorite-placeholder {
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 20px;
+}
+
+.favorite-card-right {
+  margin-left: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.favorite-symbol {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: black;
+}
+
+body.dark .favorite-symbol{
+  color: #fff;
+}
+
+.favorite-price {
+  margin-top: 6px;
+  font-weight: 600;
+  color: black;
+}
+
+body.dark .favorite-price{
+  color: #fff;
+}
+
+.favorite-card-left img.favorite-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  object-fit: contain;
+  background-color: #fff;
+  border: 1px solid #ddd;
+}
+
+.favorite-card-left {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.unfavorite-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.unfavorite-btn:hover {
+  transform: scale(1.2);
+  opacity: 0.8;
+}
+
+.news-risk {
+  margin-top: 6px;
+  font-size: 14px;
+}
+.news-risk span {
+  font-weight: 600;
+}

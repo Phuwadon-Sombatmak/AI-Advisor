@@ -1,0 +1,57 @@
+services:
+  frontend:
+    build: ./Frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=/api          # ✅ สำคัญ: ชี้ไปที่ Proxy Path
+      - VITE_FASTAPI_URL=/api-fastapi    # ✅ สำคัญ: ชี้ไปที่ Proxy Path
+      - VITE_BACKEND_TARGET=http://backend:5000
+      - VITE_FASTAPI_TARGET=http://fastapi:8000
+    depends_on:
+      - backend
+      - fastapi
+
+  backend:
+    build: ./Backend
+    ports:
+      - "5001:5000"                # ใช้ 5000 ให้ตรงกับที่โค้จรัน
+    volumes:
+      - ./Backend:/app
+      - /app/node_modules
+    env_file: ./Backend/.env
+    environment:
+      - RECAPTCHA_SKIP_VERIFY=true
+    depends_on:
+      db:
+        condition: service_healthy
+
+  fastapi:
+    build: ./FastAPIBackend
+    ports:
+      - "8000:8000"
+    env_file: ./FastAPIBackend/.env
+    volumes:
+      - ./FastAPIBackend:/app
+      - ./Backend:/app/Backend:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:15
+    container_name: project-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 290746
+      POSTGRES_DB: registerdb
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

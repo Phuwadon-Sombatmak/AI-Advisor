@@ -1,0 +1,244 @@
+.account-page {
+  max-width: 1000px;
+  margin: 50px auto;
+  padding: 20px;
+  font-family: sans-serif;
+}
+
+.risk-card {
+  position: relative;
+  background: #f0f0f3;
+  border-radius: 20px;
+  padding: 25px;
+  padding-top: 50px;
+  margin-top: 20px;
+  box-shadow: rgba(0, 0, 0, 0.16) 1px 1px 2px 2px ;
+  transition: all 0.3s ease;
+}
+
+.risk-card p {
+  position: absolute;  /* นำไปวางมุมบนซ้าย */
+  top: 20px;
+  left: 20px;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.risk-buttons {
+  display: flex;
+  justify-content: space-around;
+  gap: 10px;
+  margin-top: 60px;
+}
+
+.risk-button {
+  flex: 1;
+  margin: 0 5px;
+  padding: 12px 0;
+  background-color: #e0e0e0;
+  border: 2px solid #ccc;
+  border-radius: 5px;
+  font-weight: bold;
+  font-size: 15px;
+  cursor: pointer;
+  box-shadow: 5px 5px 10px rgba(0,0,0,0.2),
+              -5px -5px 10px rgba(255,255,255,0.7);
+  transition: all 0.3s ease;
+}
+
+/* hover effect */
+.risk-button:hover {
+  box-shadow: 8px 8px 15px rgba(0,0,0,0.3),
+              -8px -8px 15px rgba(255,255,255,0.9);
+}
+
+/* active state */
+.risk-button.active {
+  color: black;
+}
+
+/* สีแยกตามระดับ */
+.risk-button.low.active {
+  background: #34d399; /* เขียว */
+}
+
+.risk-button.medium.active {
+  background: #facc15; /* เหลือง */
+}
+
+.risk-button.high.active {
+  background: #f87171; /* แดง */
+}
+
+/* dark theme */
+body.dark {
+  --card-bg: #1f1f1f;
+  --text-color: #f1f1f1;
+  background-color: #121212;
+  color: var(--text-color);
+}
+
+.account-field {
+  margin-bottom: 20px;
+}
+
+.account-field label {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.account-field input {
+  width: 100%;
+  padding: 8px;
+  border-radius: 5px;
+  border: 1px solid #ccc;
+}
+
+.account-buttons button {
+  margin-right: 10px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.account-buttons button:hover {
+  opacity: 0.8;
+}
+
+.back-btn {
+  position: fixed;        /* ยึดตำแหน่งกับขอบจอ */
+  top: 110px;              /* ระยะจากขอบบน */
+  left: 2px;             /* ระยะจากขอบซ้าย */
+  background-color: #f3f4f6; /* เทาอ่อน (เหมือน Tailwind gray-300) */
+  color: #000000;         /* สีตัวอักษรเทาเข้ม */
+  padding: 8px 16px;      /* ขนาดปุ่ม */
+  border: 2px solid #9ca3af;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  z-index: 1000;          /* ให้อยู่เหนือองค์ประกอบอื่น */
+  transition: all 0.25s ease-in-out;
+  transform-origin: center;
+}
+
+/* โหมดมืด */
+.dark .back-btn {
+  background-color: #ffffff; /* เทาเข้ม (dark:bg-gray-700) */
+  color: #000000;            /* ตัวอักษรเทาอ่อน */
+}
+
+/* เอฟเฟกต์ hover */
+.back-btn:hover {
+  transform: scale(1.1); /* ขยายขึ้น 10% */
+  background-color: #9ca3af; /* เทากลาง (hover:bg-gray-400) */
+}
+
+.dark .back-btn:hover {
+  background-color: #4b5563; /* เทาเข้มขึ้น (dark:hover:bg-gray-600) */
+  border-color: #9ca3af; /* ขอบสว่างขึ้นนิดนึง */
+}
+
+/* พื้นหลังของการ์ดต่างๆ */
+body.dark .account-card,
+body.dark .risk-card {
+  background: #2a2a2a; /* เทาเข้ม */
+  box-shadow:
+    2px 2px 8px rgba(0, 0, 0, 0.6),
+    -2px -2px 8px rgba(255, 255, 255, 0.05);
+  color: var(--text-color);
+}
+
+/* ป้ายข้อความบน risk-card */
+body.dark .risk-card p {
+  color: var(--text-color);
+}
+
+/* ปุ่มความเสี่ยง */
+body.dark .risk-button {
+  background-color: #333;
+  border-color: #555;
+  color: #f3f3f3;
+  box-shadow:
+    3px 3px 8px rgba(0, 0, 0, 0.5),
+    -3px -3px 8px rgba(255, 255, 255, 0.05);
+}
+
+/* ปุ่ม active แยกสีในโหมดมืด */
+body.dark .risk-button.low.active {
+  background: #10b981; /* เขียวเข้ม */
+  color: #000;
+}
+body.dark .risk-button.medium.active {
+  background: #eab308; /* เหลืองสด */
+  color: #000;
+}
+body.dark .risk-button.high.active {
+  background: #ef4444; /* แดงสด */
+  color: #000;
+}
+
+/* ปุ่ม Back */
+.dark .back-btn {
+  background-color: #2d2d2d;
+  color: #ffffff;
+  border-color: #555;
+}
+.dark .back-btn:hover {
+  background-color: #4b5563;
+  border-color: #888;
+}
+
+/* ฟิลด์กรอกข้อมูล */
+body.dark .account-field input {
+  background-color: #2e2e2e;
+  border-color: #555;
+  color: #f1f1f1;
+}
+
+/* ปุ่มทั่วไป */
+body.dark .account-buttons button {
+  background-color: #3b3b3b;
+  color: #fff;
+}
+body.dark .account-buttons button:hover {
+  background-color: #555;
+}
+
+.risk-list {
+  margin-top: 1rem;
+  margin-bottom: 2rem;
+}
+
+.risk-list .hint,
+.risk-list .error {
+  margin-bottom: 1rem;
+  font-size: 1rem;
+}
+
+.risk-list .risk-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 8px;
+  margin-bottom: 1rem;
+}
+
+.risk-list .risk-table th,
+.risk-list .risk-table td {
+  padding: 0.75rem 1rem;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.risk-symbol {
+  font-weight: bold;
+  color: #4e84f8; /* Tailwind blue-600 */
+  text-decoration: none; /* เอา underline ออก */
+  transition: color 0.2s ease-in-out; /* ทำ transition สีเวลา hover */
+}
+
+.risk-symbol:hover {
+  color: #0f2d91; /* Tailwind blue-800 */
+  cursor: pointer; /* แสดง pointer cursor */
+}
