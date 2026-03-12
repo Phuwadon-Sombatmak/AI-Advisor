@@ -22,8 +22,6 @@ const sentimentDescription = (score) => {
 const ENDPOINTS = [
   "/api-fastapi/api/market-sentiment",
   "/api-fastapi/market-sentiment",
-  "http://localhost:8000/api/market-sentiment",
-  "http://localhost:8000/market-sentiment",
 ];
 
 async function fetchSentiment() {

@@ -1,5 +1,5 @@
 import React from "react";
-import { AlertTriangle, BarChart3 } from "lucide-react";
+import { AlertTriangle, BarChart3, Building2, LineChart as LineChartIcon, ShieldAlert, Target } from "lucide-react";
 import { Bar, BarChart, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import ConfidenceFooter from "./ConfidenceFooter";
 import { buildMarketSummary } from "../utils/aiAdvisor";
@@ -80,35 +80,92 @@ function ComparisonBlock({ schema, dark }) {
 
 function StructuredAnswer({ schema, summary, intent, dark }) {
   if (!schema || typeof schema !== "object") return null;
-  const isSectorStockPicker = intent === "sector_stock_picker" || schema.intent === "sector_stock_picker";
-  if (isSectorStockPicker) {
-    const picker = schema?.sector_stock_picker || {};
-    const sector = picker?.sector || "Sector";
-    const stocks = Array.isArray(picker?.stocks) ? picker.stocks : [];
-    const reasons = stocks.slice(0, 5);
-    const riskText = (Array.isArray(schema?.risks) && schema.risks[0]) || "Sector stocks can remain volatile in weak market regimes.";
+  const stockOverview = schema?.stock_overview || null;
+  const marketSignals = schema?.market_signals || null;
+  const investmentView = schema?.investment_view || null;
+  if (stockOverview && marketSignals && investmentView) {
+    const risks = Array.isArray(schema?.risks) ? schema.risks.slice(0, 4) : [];
     return (
       <div className="mt-2 space-y-2 text-[13px]">
         <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
-          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Direct Answer</p>
-          <p className="mt-1 font-medium">{schema?.direct_answer || `Top momentum stocks in ${sector}`}</p>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold inline-flex items-center gap-1.5">
+            <Building2 size={12} className="text-blue-500" /> Stock Overview
+          </p>
+          <p className="mt-1 font-semibold">{stockOverview.company_name} ({stockOverview.ticker})</p>
+          <p className="text-[12px] text-slate-500 mt-0.5">
+            {stockOverview.sector} • {stockOverview.industry}
+          </p>
+          {stockOverview.price ? <p className="mt-1 font-medium">Price: ${Number(stockOverview.price).toFixed(2)}</p> : null}
         </div>
         <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
-          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Top Stocks List ({sector})</p>
-          <p className="mt-1 font-semibold">{reasons.map((x) => x.symbol).filter(Boolean).join(", ") || "-"}</p>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold inline-flex items-center gap-1.5">
+            <LineChartIcon size={12} className="text-cyan-500" /> Market Signals
+          </p>
+          <ul className="mt-1 space-y-1">
+            <li>• Technical trend: {marketSignals.technical_trend}</li>
+            <li>• Momentum: {marketSignals.momentum}</li>
+            <li>• News sentiment: {marketSignals.news_sentiment}</li>
+            <li>• Fear & Greed: {marketSignals.fear_greed_index} ({marketSignals.market_regime})</li>
+          </ul>
         </div>
         <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
-          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Why These Names</p>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold inline-flex items-center gap-1.5">
+            <ShieldAlert size={12} className="text-rose-500" /> Key Risks
+          </p>
+          <ul className="mt-1 space-y-1">
+            {risks.map((line, idx) => (
+              <li key={`${line}-${idx}`} className="leading-relaxed">• {line}</li>
+            ))}
+          </ul>
+        </div>
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold inline-flex items-center gap-1.5">
+            <Target size={12} className="text-emerald-500" /> Investment View
+          </p>
+          <p className="mt-1 font-semibold">{investmentView.recommendation}</p>
+          <p className="text-[12px] text-slate-500 mt-0.5">AI Confidence: {investmentView.confidence}%</p>
+          <p className="text-[12px] mt-1">
+            Forecast: 7D {investmentView?.forecast_horizon?.["7d"] ?? 0}% • 30D {investmentView?.forecast_horizon?.["30d"] ?? 0}% • 90D {investmentView?.forecast_horizon?.["90d"] ?? 0}%
+          </p>
+        </div>
+      </div>
+    );
+  }
+  const isSectorStockPicker = intent === "sector_stock_picker" || schema.intent === "sector_stock_picker";
+  if (isSectorStockPicker) {
+    const picker = schema?.sector_stock_picker || {};
+    const overview = schema?.sector_overview || {};
+    const sector = picker?.sector || "Sector";
+    const etf = picker?.etf || overview?.etf || "-";
+    const stocks = Array.isArray(picker?.stocks) ? picker.stocks : [];
+    const reasons = stocks.slice(0, 5);
+    const riskText = (Array.isArray(schema?.risks) && schema.risks[0]) || "Sector stocks can remain volatile in weak market regimes.";
+    const fg = overview?.fear_greed_index;
+    const regime = overview?.market_regime || "-";
+    return (
+      <div className="mt-2 space-y-2 text-[13px]">
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Sector Overview</p>
+          <p className="mt-1 font-semibold">{sector} ({etf})</p>
+          <p className="text-[12px] text-slate-500 mt-0.5">
+            Top Stocks: {(overview?.top_stocks_inline || reasons.map((x) => x.symbol)).filter(Boolean).join(" • ") || "-"}
+          </p>
+          <p className="text-[12px] mt-1">
+            Fear & Greed: {fg ?? "-"} ({regime})
+          </p>
+        </div>
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Top Momentum Stocks</p>
           <ul className="mt-1 space-y-1">
             {reasons.map((x, idx) => (
               <li key={`${x.symbol || "S"}-${idx}`} className="leading-relaxed">
-                • {x.symbol}: {x.reason || "momentum and sentiment signals"}
+                • {x.name || x.symbol} ({x.symbol}) · {x.price != null ? `$${Number(x.price).toFixed(2)}` : "Price N/A"} · {x.return_3m_pct != null ? `3M ${Number(x.return_3m_pct) >= 0 ? "+" : ""}${Number(x.return_3m_pct).toFixed(2)}%` : "3M N/A"} · {x.momentum || "N/A"}
               </li>
             ))}
           </ul>
         </div>
         <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
-          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Risk Note</p>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Sector Risks</p>
           <p className="mt-1">{riskText}</p>
         </div>
       </div>

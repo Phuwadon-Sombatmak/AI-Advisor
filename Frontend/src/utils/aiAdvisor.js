@@ -74,6 +74,9 @@ export function getFollowupPrompts(intent = "unclear_query", schema = {}, fallba
 export function formatAssistantResponse(raw = {}) {
   return {
     intent: raw.intent || "unclear_query",
+    intentCategory: raw.intent_category || "",
+    analysisType: raw.analysis_type || "",
+    analysisEngine: raw.analysis_engine || "",
     text: raw.answer || "I could not generate a reliable answer right now.",
     confidence: Number(raw.confidence || raw.answer_schema?.confidence || 0),
     sources: Array.isArray(raw.sources) ? raw.sources : [],

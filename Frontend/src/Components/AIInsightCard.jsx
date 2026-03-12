@@ -1,7 +1,8 @@
 import React from "react";
 
-export default function AIInsightCard({ symbol = "NVDA", action = "Buy", confidence = 78, risk = "Medium", dark }) {
+export default function AIInsightCard({ symbol = "N/A", action = "N/A", confidence = null, risk = "N/A", dark }) {
   const riskClass = risk === "High" ? "bg-rose-100 text-rose-700" : risk === "Low" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700";
+  const confidenceText = Number.isFinite(Number(confidence)) ? `${Number(confidence).toFixed(0)}%` : "N/A";
 
   return (
     <div
@@ -13,7 +14,7 @@ export default function AIInsightCard({ symbol = "NVDA", action = "Buy", confide
         {symbol} <span className="text-[#2563EB]">→ {action}</span>
       </p>
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">Confidence: {confidence}%</span>
+        <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">Confidence: {confidenceText}</span>
         <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${riskClass}`}>Risk: {risk}</span>
       </div>
     </div>

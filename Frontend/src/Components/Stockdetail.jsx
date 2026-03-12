@@ -47,25 +47,9 @@ function StockdetailContent() {
         setReco(recoJson);
 
       } catch (e) {
-        console.warn("⚠️ ไม่สามารถเชื่อมต่อ Backend ได้ กำลังใช้ข้อมูลจำลอง (Mock Data)", e);
-        
-        // Fallback: ข้อมูลจำลองเพื่อให้หน้าเว็บแสดงผลได้แม้ Backend ยังไม่สมบูรณ์
-        setStockData({
-          symbol: symbol ? symbol.toUpperCase() : "AAPL",
-          latest_price: (Math.random() * 200 + 100).toFixed(2),
-          change: "+2.45%",
-          history: Array.from({ length: 30 }, (_, i) => ({
-            date: `Day ${i + 1}`,
-            close: Math.random() * 50 + 150
-          }))
-        });
-
-        setReco({
-          recommendation: "BUY",
-          target_price: (Math.random() * 50 + 200).toFixed(2),
-          confidence: 0.85
-        });
-
+        console.error("Unable to load live market data", e);
+        setStockData(null);
+        setReco(null);
       } finally {
         setLoading(false);
       }
@@ -81,6 +65,16 @@ function StockdetailContent() {
       <div className="flex flex-col items-center justify-center h-96 text-indigo-600">
         <Loader2 className="animate-spin mb-4" size={48} />
         <p className="font-bold">กำลังวิเคราะห์ข้อมูล {symbol || "AAPL"}...</p>
+      </div>
+    );
+  }
+
+  if (!stockData) {
+    return (
+      <div className="max-w-5xl mx-auto">
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-700 font-semibold">
+          Data unavailable for this ticker.
+        </div>
       </div>
     );
   }

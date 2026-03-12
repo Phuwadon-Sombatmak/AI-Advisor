@@ -9,7 +9,8 @@ import Topbar from "./Components/Topbar";
 import HeroSearch from "./Components/HeroSearch";
 import StockCard from "./Components/StockCard";
 import StockChart from "./Components/StockChart";
-import ReturnIndicator from "./Components/ReturnIndicator";
+import StockCompanyHeader from "./Components/StockCompanyHeader";
+import StockStatsGrid from "./Components/StockStatsGrid";
 import TimeRangeSelector from "./Components/TimeRangeSelector";
 import NewsCard from "./Components/NewsCard";
 import AIInsightCard from "./Components/AIInsightCard";
@@ -46,46 +47,24 @@ import AIInvestmentAnalysis from "./Components/AIInvestmentAnalysis";
 import { formatCurrencyUSD, formatDateTimeByLang } from "./utils/formatters";
 const ThemeContext = React.createContext({ theme: "light", toggleTheme: () => {} });
 
-const FASTAPI_BASE = (import.meta.env.VITE_FASTAPI_URL || "/api-fastapi").replace(/\/$/, "");
-const FALLBACK_NEWS = [
-  {
-    title: "ตลาดหุ้นสหรัฐแกว่งตัวจากแรงซื้อหุ้นเทคโนโลยีขนาดใหญ่",
-    provider: "Market Watch",
-    image: "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=400&h=300&fit=crop",
-    link: "https://finance.yahoo.com/",
-  },
-  {
-    title: "นักลงทุนจับตาทิศทางดอกเบี้ยและผลประกอบการรายไตรมาส",
-    provider: "Financial Times",
-    image: "https://images.unsplash.com/photo-1642790551116-18e150f248e5?w=400&h=300&fit=crop",
-    link: "https://www.ft.com/markets",
-  },
-  {
-    title: "AI และเซมิคอนดักเตอร์ยังเป็นธีมหลักของตลาดปีนี้",
-    provider: "Bloomberg",
-    image: "https://images.unsplash.com/photo-1620712943543-bcc4688e7485?w=400&h=300&fit=crop",
-    link: "https://www.bloomberg.com/markets",
-  },
-];
-
-const STOCK_MINI_DATA = [
-  { symbol: "NVDA", price: 177.82, change: 2.31, points: [34, 36, 35, 38, 40, 39, 43] },
-  { symbol: "MSFT", price: 428.15, change: 1.12, points: [28, 29, 31, 30, 33, 34, 35] },
-  { symbol: "AAPL", price: 199.21, change: -0.64, points: [42, 41, 39, 40, 38, 37, 36] },
-  { symbol: "TSLA", price: 219.75, change: 3.94, points: [21, 24, 23, 27, 29, 31, 33] },
-];
+const RAW_FASTAPI_BASE = (import.meta.env.VITE_FASTAPI_URL || "/api-fastapi").replace(/\/$/, "");
+const FASTAPI_BASE = (() => {
+  if (typeof window === "undefined") return RAW_FASTAPI_BASE;
+  try {
+    if (/^https?:\/\//i.test(RAW_FASTAPI_BASE)) {
+      const u = new URL(RAW_FASTAPI_BASE);
+      // Force same-origin path usage to avoid CORS/access-control issues when app is served on another origin/port.
+      return (u.pathname || "/api-fastapi").replace(/\/$/, "") || "/api-fastapi";
+    }
+  } catch {
+    // keep raw fallback
+  }
+  return RAW_FASTAPI_BASE;
+})();
 const WATCHLIST_STORAGE_KEY = "ai-invest-watchlist-v1";
 const NEWS_BOOKMARK_STORAGE_KEY = "ai-invest-news-bookmarks-v1";
-const WATCHLIST_META = {
-  NVDA: { company: "NVIDIA Corporation", sector: "Semiconductors", aiScore: 92, sentiment: "Bullish" },
-  MSFT: { company: "Microsoft Corporation", sector: "Software", aiScore: 89, sentiment: "Bullish" },
-  AAPL: { company: "Apple Inc.", sector: "Consumer Tech", aiScore: 84, sentiment: "Neutral" },
-  TSLA: { company: "Tesla, Inc.", sector: "EV & Mobility", aiScore: 78, sentiment: "Bearish" },
-  AMZN: { company: "Amazon.com, Inc.", sector: "E-Commerce", aiScore: 86, sentiment: "Bullish" },
-  AMD: { company: "Advanced Micro Devices", sector: "Semiconductors", aiScore: 83, sentiment: "Bullish" },
-  META: { company: "Meta Platforms, Inc.", sector: "Internet", aiScore: 81, sentiment: "Neutral" },
-  GOOGL: { company: "Alphabet Inc.", sector: "Internet", aiScore: 82, sentiment: "Bullish" },
-};
+const AI_INSIGHTS_CACHE_TTL_MS = 120000;
+const aiInsightsViewCache = new Map();
 
 const BRAND_LOGO = "/Ail.svg?v=20260308";
 
@@ -200,6 +179,13 @@ const apiUrl = (path) => {
   return `${FASTAPI_BASE}${normalized}`;
 };
 
+const localFastapiUrl = (path) => {
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  if (typeof window === "undefined") return `http://localhost:8000${normalized}`;
+  const host = window.location.hostname || "localhost";
+  return `http://${host}:8000${normalized}`;
+};
+
 const getMaxDobFor18 = () => {
   const d = new Date();
   d.setFullYear(d.getFullYear() - 18);
@@ -219,39 +205,55 @@ const isAtLeast18 = (dob) => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function fetchJsonWithRetry(paths, retries = 2, timeoutMs = 8000, init = undefined) {
+async function fetchJsonWithRetry(paths, retries = 2, timeoutMs = 20000, init = undefined) {
   let lastError = null;
+  const isLocalHost = (host) => host === "localhost" || host === "127.0.0.1";
+  const usablePaths = (paths || []).filter((p) => {
+    const path = String(p || "");
+    if (!path) return false;
+    if (typeof window === "undefined") return true;
+    if (!/^https?:\/\//i.test(path)) return true;
+    try {
+      const u = new URL(path);
+      // Skip cross-origin URLs in browser to prevent access-control failures.
+      if (u.origin === window.location.origin) return true;
+      // Allow local dev fallback across localhost ports (e.g. :80 -> :8000)
+      if (isLocalHost(u.hostname) && isLocalHost(window.location.hostname)) return true;
+      return false;
+    } catch {
+      return false;
+    }
+  });
+
+  if (!usablePaths.length) {
+    throw new Error("No same-origin API path available");
+  }
+
   for (let i = 0; i < retries; i += 1) {
-    for (const path of paths) {
+    for (const path of usablePaths) {
+      let timer = null;
       try {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        timer = setTimeout(() => controller.abort(), timeoutMs);
         const res = await fetch(path, { ...(init || {}), signal: controller.signal });
-        clearTimeout(timer);
         if (!res.ok) {
           lastError = new Error(`HTTP ${res.status}`);
           continue;
         }
         return await res.json();
       } catch (e) {
-        lastError = e;
+        if (e?.name === "AbortError") {
+          lastError = new Error(`Request timeout after ${timeoutMs}ms: ${path}`);
+        } else {
+          lastError = e;
+        }
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }
     await sleep(500 * (i + 1));
   }
   throw lastError || new Error("fetch failed");
-}
-
-function getWatchMeta(symbol) {
-  const key = String(symbol || "").toUpperCase();
-  const base = WATCHLIST_META[key] || {};
-  return {
-    symbol: key,
-    company: base.company || `${key} Inc.`,
-    sector: base.sector || "General",
-    aiScore: base.aiScore || 75,
-    sentiment: base.sentiment || "Neutral",
-  };
 }
 
 function sentimentFromChange(change) {
@@ -290,6 +292,31 @@ function inferSectorTag(item) {
   if (/(fed|inflation|rates|treasury|jobs|macro|cpi|gdp)/.test(raw)) return "Macro";
   if (/(apple|microsoft|google|amazon|meta|technology|tech)/.test(raw)) return "Technology";
   return "Technology";
+}
+
+function normalizeSymbolList(values = []) {
+  const out = [];
+  const seen = new Set();
+  for (const value of values) {
+    const symbol = String(value || "").trim().toUpperCase();
+    if (!/^[A-Z0-9.-]{1,12}$/.test(symbol)) continue;
+    if (seen.has(symbol)) continue;
+    seen.add(symbol);
+    out.push(symbol);
+  }
+  return out;
+}
+
+function dedupeNewsItems(items = []) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    const key = String(item?.link || item?.title || "").trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
 }
 
 const PrivateLayout = () => {
@@ -635,41 +662,168 @@ const SearchPage = ({ watchlist = [], onToggleWatchlist = () => {}, recentSearch
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [newsLoading, setNewsLoading] = useState(true);
+  const [miniLoading, setMiniLoading] = useState(true);
   const [dailyNews, setDailyNews] = useState([]);
+  const [miniCards, setMiniCards] = useState([]);
+  const [suggestions, setSuggestions] = useState([]);
+  const [highlight, setHighlight] = useState(null);
+  const [marketSentimentScore, setMarketSentimentScore] = useState(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
 
-  const stocksList = [
-    { name: "NVIDIA Corporation", symbol: "NVDA" },
-    { name: "Microsoft Corporation", symbol: "MSFT" },
-    { name: "Apple Inc.", symbol: "AAPL" },
-    { name: "Tesla, Inc.", symbol: "TSLA" },
-    { name: "Amazon.com, Inc.", symbol: "AMZN" },
-  ];
+  const seedSymbols = useMemo(
+    () => normalizeSymbolList([...(recentSearches || []), ...(watchlist || [])]),
+    [recentSearches, watchlist]
+  );
 
   useEffect(() => {
-    const fetchNews = async () => {
+    let alive = true;
+    const run = async () => {
       setNewsLoading(true);
+      setMiniLoading(true);
+      setHighlight(null);
+
+      let symbols = [...seedSymbols];
+      if (!symbols.length) {
+        try {
+          const picker = await fetchJsonWithRetry(
+            [
+              apiUrl("/ai-picker?strategy=BALANCED&limit=8"),
+              "http://localhost:8000/ai-picker?strategy=BALANCED&limit=8",
+            ],
+            2,
+            8000
+          );
+          symbols = normalizeSymbolList((picker?.items || []).map((item) => item?.ticker));
+        } catch {
+          symbols = [];
+        }
+      }
+
+      if (!symbols.length) {
+        try {
+          const summary = await fetchJsonWithRetry(
+            [
+              apiUrl("/api/ai-summary"),
+              "http://localhost:8000/api/ai-summary",
+            ],
+            1,
+            8000,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ context: { watchlist, recent_searches: recentSearches } }),
+            }
+          );
+          symbols = normalizeSymbolList([summary?.summary?.top_ai_pick]);
+        } catch {
+          symbols = [];
+        }
+      }
+
+      const primarySymbols = symbols.slice(0, 8);
+      if (alive) setSuggestions(primarySymbols.slice(0, 5));
+
       try {
-        const data = await fetchJsonWithRetry(
-          [
-            apiUrl("/news?symbols=NVDA,MSFT,AAPL&days_back=7"),
-            "http://localhost:8000/news?symbols=NVDA,MSFT,AAPL&days_back=7",
-          ],
-          5
-        );
-        const merged = (Array.isArray(data) ? data : [])
-          .flatMap((item) => item.news || [])
-          .slice(0, 6);
-        setDailyNews(merged.length > 0 ? merged : FALLBACK_NEWS);
+        if (!primarySymbols.length) {
+          if (alive) setDailyNews([]);
+        } else {
+          const newsData = await fetchJsonWithRetry(
+            [
+              apiUrl(`/news?symbols=${encodeURIComponent(primarySymbols.slice(0, 4).join(","))}&days_back=7`),
+              `http://localhost:8000/news?symbols=${encodeURIComponent(primarySymbols.slice(0, 4).join(","))}&days_back=7`,
+            ],
+            3,
+            8000
+          );
+          const merged = dedupeNewsItems(
+            (Array.isArray(newsData) ? newsData : []).flatMap((item) => item.news || [])
+          ).slice(0, 6);
+          if (alive) setDailyNews(merged);
+        }
       } catch {
-        setDailyNews(FALLBACK_NEWS);
-      } finally {
+        if (alive) setDailyNews([]);
+      }
+
+      try {
+        const sentimentPayload = await fetchJsonWithRetry(
+          [
+            apiUrl("/api/market-sentiment"),
+            "http://localhost:8000/api/market-sentiment",
+          ],
+          2,
+          8000
+        );
+        if (alive) setMarketSentimentScore(Number(sentimentPayload?.score ?? sentimentPayload?.market_score ?? 50));
+      } catch {
+        if (alive) setMarketSentimentScore(null);
+      }
+
+      try {
+        const cardSymbols = primarySymbols.slice(0, 4);
+        const cards = await Promise.all(
+          cardSymbols.map(async (symbol) => {
+            const payload = await fetchJsonWithRetry(
+              [
+                apiUrl(`/stock/${symbol}?range=1m`),
+                `http://localhost:8000/stock/${symbol}?range=1m`,
+              ],
+              2,
+              8000
+            );
+            const history = Array.isArray(payload?.history) ? payload.history : [];
+            const points = history
+              .slice(-8)
+              .map((row) => Number(row?.close ?? row?.price ?? 0))
+              .filter((value) => Number.isFinite(value) && value > 0);
+            return {
+              symbol,
+              price: Number(payload?.latest_price ?? payload?.price ?? 0),
+              change: Number(payload?.change_pct ?? payload?.daily_change_pct ?? 0),
+              points,
+            };
+          })
+        );
+        if (alive) setMiniCards(cards.filter((item) => Number.isFinite(item.price) && item.price > 0));
+      } catch {
+        if (alive) setMiniCards([]);
+      }
+
+      try {
+        const topSymbol = primarySymbols[0];
+        if (!topSymbol) {
+          if (alive) setHighlight(null);
+        } else {
+          const reco = await fetchJsonWithRetry(
+            [
+              apiUrl(`/recommend?symbol=${topSymbol}&window_days=14`),
+              `http://localhost:8000/recommend?symbol=${topSymbol}&window_days=14`,
+            ],
+            1,
+            8000
+          );
+          if (alive) {
+            setHighlight({
+              symbol: topSymbol,
+              action: reco?.recommendation || "Hold",
+              confidence: Math.round((Number(reco?.confidence || 0.65) || 0.65) * 100),
+              risk: reco?.risk_level || "Medium",
+            });
+          }
+        }
+      } catch {
+        if (alive) setHighlight(null);
+      }
+
+      if (alive) {
+        setMiniLoading(false);
         setNewsLoading(false);
       }
     };
-
-    fetchNews();
-  }, []);
+    run();
+    return () => {
+      alive = false;
+    };
+  }, [seedSymbols, watchlist, recentSearches]);
 
   const handleSearch = () => {
     if (query.trim()) {
@@ -685,7 +839,7 @@ const SearchPage = ({ watchlist = [], onToggleWatchlist = () => {}, recentSearch
         query={query}
         setQuery={setQuery}
         onSearch={handleSearch}
-        suggestions={stocksList.map((s) => s.symbol)}
+        suggestions={suggestions}
         onPick={(symbol) => {
           onRecordSearch(symbol);
           navigate(`/stock/${symbol}`);
@@ -695,23 +849,41 @@ const SearchPage = ({ watchlist = [], onToggleWatchlist = () => {}, recentSearch
       <MarketSentiment dark={theme === "dark"} />
 
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {STOCK_MINI_DATA.map((s) => {
-          const saved = watchlist.includes(s.symbol);
-          return (
-            <div key={s.symbol} className="relative">
-              <StarButton
-                active={saved}
-                onToggle={() => onToggleWatchlist(s.symbol)}
-                className="absolute top-3 right-3 z-10"
-                title={saved ? `${t("removeFromWatchlist")} ${s.symbol}` : `${t("addToWatchlist")} ${s.symbol}`}
-              />
-              <StockCard symbol={s.symbol} price={s.price} change={s.change} points={s.points} dark={theme === "dark"} />
-            </div>
-          );
-        })}
+        {miniLoading ? (
+          <div className={`${theme === "dark" ? "bg-[#0F172A] border-slate-700 text-slate-300" : "bg-white border-slate-200 text-slate-500"} col-span-full rounded-2xl border p-6 shadow-sm`}>
+            {t("analyzing")}...
+          </div>
+        ) : miniCards.length === 0 ? (
+          <div className={`${theme === "dark" ? "bg-[#0F172A] border-slate-700 text-slate-300" : "bg-white border-slate-200 text-slate-500"} col-span-full rounded-2xl border p-6 shadow-sm`}>
+            {t("noData") === "noData" ? "No market data available right now." : t("noData")}
+          </div>
+        ) : (
+          miniCards.map((s) => {
+            const saved = watchlist.includes(s.symbol);
+            return (
+              <div key={s.symbol} className="relative">
+                <StarButton
+                  active={saved}
+                  onToggle={() => onToggleWatchlist(s.symbol)}
+                  className="absolute top-3 right-3 z-10"
+                  title={saved ? `${t("removeFromWatchlist")} ${s.symbol}` : `${t("addToWatchlist")} ${s.symbol}`}
+                />
+                <StockCard symbol={s.symbol} price={s.price} change={s.change} points={s.points} dark={theme === "dark"} />
+              </div>
+            );
+          })
+        )}
       </section>
 
-      <AIInsightCard symbol="NVDA" action="Buy" confidence={78} risk="Medium" dark={theme === "dark"} />
+      {highlight ? (
+        <AIInsightCard
+          symbol={highlight.symbol}
+          action={highlight.action}
+          confidence={highlight.confidence}
+          risk={highlight.risk}
+          dark={theme === "dark"}
+        />
+      ) : null}
 
       <div className="space-y-4">
         <div className="flex items-center justify-between mb-6">
@@ -726,9 +898,11 @@ const SearchPage = ({ watchlist = [], onToggleWatchlist = () => {}, recentSearch
         </div>
         {newsLoading ? (
           <div className="text-slate-500 font-medium">{t("loadingNews")}</div>
+        ) : dailyNews.length === 0 ? (
+          <div className="text-slate-500 font-medium">{t("newsNoData")}</div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {dailyNews.map((news, i) => <NewsCard key={i} news={news} dark={theme === "dark"} />)}
+            {dailyNews.map((news, i) => <NewsCard key={`${news.link || news.title || "news"}-${i}`} news={news} dark={theme === "dark"} />)}
           </div>
         )}
       </div>
@@ -740,7 +914,7 @@ const SearchPage = ({ watchlist = [], onToggleWatchlist = () => {}, recentSearch
         context={{
           watchlist,
           recent_searches: recentSearches,
-          sentiment: 50,
+          sentiment: marketSentimentScore,
           portfolio: watchlist.map((s) => ({ symbol: s })),
         }}
       />
@@ -953,6 +1127,9 @@ const Stockdetail = ({ watchlist = [], onToggleWatchlist = () => {} }) => {
   const navigate = useNavigate();
   const [stockData, setStockData] = useState(null);
   const [reco, setReco] = useState(null);
+  const [stockDetails, setStockDetails] = useState(null);
+  const [stockDetailsLoading, setStockDetailsLoading] = useState(true);
+  const [stockProfile, setStockProfile] = useState(null);
   const [newsItems, setNewsItems] = useState([]);
   const [newsLoading, setNewsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -965,12 +1142,18 @@ const Stockdetail = ({ watchlist = [], onToggleWatchlist = () => {} }) => {
       setLoading(true);
       setError("");
       setReco(null);
+      setStockDetails(null);
+      setStockDetailsLoading(true);
+      setStockProfile(null);
       setNewsItems([]);
       setNewsLoading(false);
       try {
         const rawSymbol = String(symbol || "").trim().toUpperCase();
-        const safeSymbol = /^[A-Z0-9.-]{1,12}$/.test(rawSymbol) ? rawSymbol : "NVDA";
-        const [stockJson, quoteJson] = await Promise.all([
+        if (!/^[A-Z0-9.-]{1,12}$/.test(rawSymbol)) {
+          throw new Error("invalid_symbol");
+        }
+        const safeSymbol = rawSymbol;
+        const [stockJson, quoteJson, detailsJson, profileJson] = await Promise.all([
           fetchJsonWithRetry(
             [
               apiUrl(`/api/stock-history?ticker=${safeSymbol}&period=${range}`),
@@ -988,6 +1171,30 @@ const Stockdetail = ({ watchlist = [], onToggleWatchlist = () => {} }) => {
             ],
             2,
             5000
+          ).catch(() => null),
+          fetchJsonWithRetry(
+            [
+              apiUrl(`/api/stock/financials/${safeSymbol}`),
+              apiUrl(`/stock/financials/${safeSymbol}`),
+              apiUrl(`/api/stock/details/${safeSymbol}`),
+              apiUrl(`/stock/details/${safeSymbol}`),
+              `http://localhost:8000/api/stock/financials/${safeSymbol}`,
+              `http://localhost:8000/stock/financials/${safeSymbol}`,
+              `http://localhost:8000/api/stock/details/${safeSymbol}`,
+              `http://localhost:8000/stock/details/${safeSymbol}`,
+            ],
+            1,
+            6000
+          ).catch(() => null),
+          fetchJsonWithRetry(
+            [
+              apiUrl(`/api/stock/profile/${safeSymbol}`),
+              apiUrl(`/stock/profile/${safeSymbol}`),
+              `http://localhost:8000/api/stock/profile/${safeSymbol}`,
+              `http://localhost:8000/stock/profile/${safeSymbol}`,
+            ],
+            1,
+            6000
           ).catch(() => null),
         ]);
 
@@ -1010,31 +1217,43 @@ const Stockdetail = ({ watchlist = [], onToggleWatchlist = () => {} }) => {
           throw new Error("no_history");
         }
 
-        const first = Number(history[0]?.close || 0);
-        const quoteLatest = Number(quoteJson?.latest_price || quoteJson?.price || 0);
-        const historyLatest = Number(history[history.length - 1]?.close || 0);
-        const latest = quoteLatest > 0 ? quoteLatest : historyLatest;
+        const firstClose = Number(quoteJson?.first_close || history[0]?.close || 0);
+        const lastClose = Number(quoteJson?.last_close || history[history.length - 1]?.close || 0);
         const previousClose = Number(quoteJson?.previous_close || 0);
-        const baseline = previousClose > 0 ? previousClose : first;
-        const dailyChangePct = baseline ? ((latest - baseline) / baseline) * 100 : 0;
-        const returnPct = range === "1d"
-          ? dailyChangePct
-          : (first ? ((latest - first) / first) * 100 : 0);
+        const latest = lastClose > 0 ? lastClose : Number(history[history.length - 1]?.close || 0);
 
-        // Keep chart endpoint consistent with displayed latest quote to avoid visible mismatch/jitter.
-        if (quoteLatest > 0 && history.length) {
-          const lastIdx = history.length - 1;
-          history[lastIdx] = { ...history[lastIdx], close: quoteLatest };
-        }
+        // Strict close-only range return to match finance platforms.
+        const rangeReturnFromClose = firstClose > 0 ? ((latest - firstClose) / firstClose) * 100 : 0;
+        const dailyChangePct = Number.isFinite(Number(quoteJson?.change_pct))
+          ? Number(quoteJson?.change_pct)
+          : (previousClose > 0 ? ((latest - previousClose) / previousClose) * 100 : 0);
+        const changeAbs = Number.isFinite(Number(quoteJson?.change))
+          ? Number(quoteJson?.change)
+          : (previousClose > 0 ? (latest - previousClose) : 0);
+        const returnPct = Number.isFinite(Number(quoteJson?.range_return_pct))
+          ? Number(quoteJson?.range_return_pct)
+          : (range === "1d" ? dailyChangePct : rangeReturnFromClose);
 
         if (!alive) return;
         setStockData({
           symbol: safeSymbol,
           latest_price: latest,
+          change_abs: changeAbs,
           daily_change_pct: dailyChangePct,
           return_pct: returnPct,
+          previous_close: previousClose > 0 ? previousClose : null,
+          first_close: firstClose > 0 ? firstClose : null,
+          last_close: latest > 0 ? latest : null,
+          volume: Number(quoteJson?.volume || history[history.length - 1]?.volume || 0),
+          day_range_low: Number(quoteJson?.day_range_low || 0) || null,
+          day_range_high: Number(quoteJson?.day_range_high || 0) || null,
+          range_52w_low: Number(quoteJson?.range_52w_low || 0) || null,
+          range_52w_high: Number(quoteJson?.range_52w_high || 0) || null,
           history,
         });
+        setStockDetails(detailsJson && typeof detailsJson === "object" ? detailsJson : null);
+        setStockDetailsLoading(false);
+        setStockProfile(profileJson && typeof profileJson === "object" ? profileJson : { name: safeSymbol, ticker: safeSymbol });
 
         setLoading(false);
         setNewsLoading(true);
@@ -1088,6 +1307,9 @@ const Stockdetail = ({ watchlist = [], onToggleWatchlist = () => {} }) => {
         if (!alive) return;
         setError(t("stockLoadError") === "stockLoadError" ? "ไม่สามารถโหลดข้อมูลหุ้นได้ในขณะนี้" : t("stockLoadError"));
         setStockData(null);
+        setStockDetails(null);
+        setStockDetailsLoading(false);
+        setStockProfile(null);
         setReco(null);
         setNewsItems([]);
       } finally {
@@ -1165,11 +1387,14 @@ const Stockdetail = ({ watchlist = [], onToggleWatchlist = () => {} }) => {
           className={theme === "dark" ? "bg-slate-900 border-slate-700 text-slate-300" : ""}
         />
         <div className="flex-1">
-          <ReturnIndicator
+          <StockCompanyHeader
+            profile={stockProfile}
             symbol={stockData.symbol}
             currentPrice={stockData.latest_price}
+            changeAbs={stockData.change_abs}
             dailyChangePct={stockData.daily_change_pct}
             returnPct={stockData.return_pct}
+            rangeLabel={String(range || "1y").toUpperCase()}
             language={i18n.language}
             dark={theme === "dark"}
           />
@@ -1180,6 +1405,8 @@ const Stockdetail = ({ watchlist = [], onToggleWatchlist = () => {} }) => {
         <TimeRangeSelector range={range} onChange={setRange} dark={theme === "dark"} />
         <StockChart data={chartSeries} returnPct={stockData.return_pct} dark={theme === "dark"} />
       </div>
+
+      <StockStatsGrid details={stockDetails} loading={stockDetailsLoading} language={i18n.language} dark={theme === "dark"} />
 
       {reco ? <AIInvestmentAnalysis reco={reco} language={i18n.language} dark={theme === "dark"} /> : null}
 
@@ -1251,17 +1478,40 @@ const RISK_PROFILE_OPTIONS = [
   },
 ];
 
-const AI_PICKER_UNIVERSE = [
-  { ticker: "NVDA", company: "NVIDIA Corporation", risk: "MEDIUM", strategy: "AI Trend", sentiment: "Bullish", momentum: "Strong", aiScore: 92, confidence: 88 },
-  { ticker: "MSFT", company: "Microsoft Corporation", risk: "LOW", strategy: "Growth", sentiment: "Bullish", momentum: "Strong", aiScore: 89, confidence: 86 },
-  { ticker: "AAPL", company: "Apple Inc.", risk: "LOW", strategy: "Value", sentiment: "Neutral", momentum: "Moderate", aiScore: 80, confidence: 78 },
-  { ticker: "TSLA", company: "Tesla Inc.", risk: "HIGH", strategy: "Momentum", sentiment: "Bearish", momentum: "Strong", aiScore: 75, confidence: 71 },
-  { ticker: "AMZN", company: "Amazon.com Inc.", risk: "MEDIUM", strategy: "Growth", sentiment: "Bullish", momentum: "Strong", aiScore: 87, confidence: 84 },
-  { ticker: "AMD", company: "Advanced Micro Devices", risk: "HIGH", strategy: "AI Trend", sentiment: "Bullish", momentum: "Strong", aiScore: 85, confidence: 80 },
-  { ticker: "META", company: "Meta Platforms", risk: "MEDIUM", strategy: "Momentum", sentiment: "Neutral", momentum: "Strong", aiScore: 83, confidence: 79 },
-  { ticker: "GOOGL", company: "Alphabet Inc.", risk: "LOW", strategy: "Value", sentiment: "Bullish", momentum: "Moderate", aiScore: 82, confidence: 81 },
-  { ticker: "PLTR", company: "Palantir Technologies", risk: "HIGH", strategy: "AI Trend", sentiment: "Bullish", momentum: "Strong", aiScore: 88, confidence: 85 },
-];
+const strategyToApi = (strategy) => {
+  if (strategy === "Momentum" || strategy === "AI Trend") return "AGGRESSIVE";
+  if (strategy === "Value") return "DEFENSIVE";
+  return "BALANCED";
+};
+
+const sentimentFromValue = (raw) => {
+  const score = Number(raw);
+  if (Number.isFinite(score)) {
+    if (score > 0.2) return "Bullish";
+    if (score < -0.2) return "Bearish";
+    return "Neutral";
+  }
+  const text = String(raw || "").toLowerCase();
+  if (text.includes("bull")) return "Bullish";
+  if (text.includes("bear")) return "Bearish";
+  return "Neutral";
+};
+
+const riskFromVolatility = (volatility) => {
+  const vol = Number(volatility);
+  if (!Number.isFinite(vol)) return "MEDIUM";
+  if (vol >= 0.4) return "HIGH";
+  if (vol >= 0.22) return "MEDIUM";
+  return "LOW";
+};
+
+const momentumFromReturn = (ret30) => {
+  const value = Number(ret30);
+  if (!Number.isFinite(value)) return "Moderate";
+  if (value >= 8) return "Strong";
+  if (value <= -3) return "Weak";
+  return "Moderate";
+};
 
 const AIPickerPage = () => {
   const { t } = useTranslation();
@@ -1270,30 +1520,67 @@ const AIPickerPage = () => {
   const [risk, setRisk] = useState("MEDIUM");
   const [strategy, setStrategy] = useState("AI Trend");
   const [sentiment, setSentiment] = useState("Bullish");
+  const [allPicks, setAllPicks] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [seed, setSeed] = useState(0);
+  const [error, setError] = useState("");
+
+  const loadPicks = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetchJsonWithRetry(
+        [
+          apiUrl(`/ai-picker?strategy=${strategyToApi(strategy)}&limit=30`),
+          `http://localhost:8000/ai-picker?strategy=${strategyToApi(strategy)}&limit=30`,
+        ],
+        2,
+        12000
+      );
+      const mapped = (response?.items || []).map((row) => {
+        const aiScore = Number(row?.ai_score ?? row?.score ?? 0);
+        const confidenceRaw = Number(row?.confidence);
+        return {
+          ticker: String(row?.ticker || "").toUpperCase(),
+          company: row?.company || row?.name || String(row?.ticker || "").toUpperCase(),
+          risk: riskFromVolatility(row?.volatility),
+          strategy,
+          sentiment: sentimentFromValue(row?.sentiment),
+          momentum: momentumFromReturn(row?.ret30),
+          aiScore: Math.max(0, Math.min(100, Number.isFinite(aiScore) ? aiScore : 0)),
+          confidence: Number.isFinite(confidenceRaw) ? Math.max(0, Math.min(100, confidenceRaw)) : null,
+          reason: row?.reason || "",
+        };
+      });
+      setAllPicks(mapped);
+    } catch (e) {
+      setAllPicks([]);
+      setError(e?.message || "Unable to load AI picks");
+    } finally {
+      setLoading(false);
+    }
+  }, [strategy]);
+
+  useEffect(() => {
+    loadPicks();
+  }, [loadPicks]);
 
   const picks = useMemo(() => {
-    const byFilter = AI_PICKER_UNIVERSE.filter(
-      (s) => s.risk === risk && s.strategy === strategy && s.sentiment === sentiment
-    );
-    const fallback = AI_PICKER_UNIVERSE.filter((s) => s.risk === risk);
-    const selected = byFilter.length > 0 ? byFilter : fallback;
-    return [...selected].sort((a, b) => b.aiScore - a.aiScore).slice(0, 9);
-  }, [risk, strategy, sentiment, seed]);
+    const byRisk = allPicks.filter((item) => item.risk === risk);
+    const bySentiment = byRisk.filter((item) => item.sentiment === sentiment);
+    const selected = bySentiment.length ? bySentiment : byRisk;
+    return selected.sort((a, b) => b.aiScore - a.aiScore).slice(0, 9);
+  }, [allPicks, risk, sentiment]);
 
   const topPicks = useMemo(() => [...picks].sort((a, b) => b.aiScore - a.aiScore).slice(0, 3), [picks]);
 
   const insight = useMemo(() => {
-    const sectorBias = strategy === "AI Trend" ? "AI infrastructure and semiconductor names" : `${strategy.toLowerCase()} opportunities`;
-    return `AI detected ${sentiment.toLowerCase()} sentiment with ${risk.toLowerCase()} risk preference. Current picks emphasize ${sectorBias} with improving momentum signals and relative strength versus market baseline.`;
-  }, [risk, strategy, sentiment]);
+    if (!picks.length) return t("noPicks");
+    const averageScore = (picks.reduce((sum, item) => sum + Number(item.aiScore || 0), 0) / picks.length).toFixed(1);
+    return `Top picks reflect ${sentiment.toLowerCase()} sentiment with ${risk.toLowerCase()} risk profile. Strategy focus: ${strategy}. Average AI score: ${averageScore}.`;
+  }, [picks, risk, strategy, sentiment, t]);
 
   const onGenerate = async () => {
-    setLoading(true);
-    await sleep(450);
-    setSeed((x) => x + 1);
-    setLoading(false);
+    await loadPicks();
   };
 
   return (
@@ -1312,6 +1599,11 @@ const AIPickerPage = () => {
 
       <section className="space-y-3">
         <h2 className={`${dark ? "text-slate-100" : "text-slate-900"} text-2xl font-bold`}>{t("topAiPicksToday")}</h2>
+        {error ? (
+          <div className={`${dark ? "bg-rose-950/30 border-rose-900/50 text-rose-300" : "bg-rose-50 border-rose-200 text-rose-700"} rounded-2xl border p-4 text-sm font-medium`}>
+            {error}
+          </div>
+        ) : null}
         {topPicks.length === 0 ? (
           <div className={`${dark ? "bg-[#0F172A] border-slate-700 text-slate-300" : "bg-white border-slate-200 text-slate-500"} rounded-2xl border p-8 shadow-md`}>
             {t("noPicks")}
@@ -1461,45 +1753,56 @@ const WatchlistPage = ({ watchlist = [], onToggleWatchlist = () => {}, onAddWatc
       const nextRows = await Promise.all(
         watchlist.map(async (symbol) => {
           const safeSymbol = String(symbol || "").toUpperCase();
-          const meta = getWatchMeta(safeSymbol);
           try {
-            const stockJson = await fetchJsonWithRetry(
-              [
-                apiUrl(`/stock/${safeSymbol}?range=1m`),
-                `http://localhost:8000/stock/${safeSymbol}?range=1m`,
-              ],
-              4
-            );
+            const [stockJson, recoJson] = await Promise.all([
+              fetchJsonWithRetry(
+                [
+                  apiUrl(`/stock/${safeSymbol}?range=1m`),
+                  `http://localhost:8000/stock/${safeSymbol}?range=1m`,
+                ],
+                4
+              ),
+              fetchJsonWithRetry(
+                [
+                  apiUrl(`/recommend?symbol=${safeSymbol}&window_days=14`),
+                  `http://localhost:8000/recommend?symbol=${safeSymbol}&window_days=14`,
+                ],
+                1,
+                7000
+              ).catch(() => null),
+            ]);
             const history = stockJson.history || [];
-            const latest = Number(history[history.length - 1]?.close || stockJson.price || 0);
-            const prev = Number(history[history.length - 2]?.close || latest || 0);
-            const change = prev ? ((latest - prev) / prev) * 100 : 0;
-            const points = history.slice(-7).map((h) => Number(h.close || 0)).filter((x) => Number.isFinite(x) && x > 0);
+            const company = String(stockJson.name || safeSymbol);
+            const latest = Number(stockJson.latest_price || stockJson.price || history[history.length - 1]?.close || 0);
+            const previousClose = Number(stockJson.previous_close || history[history.length - 2]?.close || latest || 0);
+            const change = previousClose ? ((latest - previousClose) / previousClose) * 100 : 0;
+            const points = history
+              .slice(-7)
+              .map((h) => Number(h.close || h.price || 0))
+              .filter((x) => Number.isFinite(x) && x > 0);
             const volume = Number(history[history.length - 1]?.volume || stockJson.volume || 0);
+            const aiScore = Number(recoJson?.ai_score || 0);
 
             return {
-              ...meta,
+              symbol: safeSymbol,
+              company,
+              sector: String(recoJson?.risk_level || "Unclassified"),
               price: latest,
               change,
               volume,
-              points: points.length ? points : [10, 12, 11, 13, 14, 15, 16],
+              aiScore: Number.isFinite(aiScore) ? Math.round(aiScore) : 0,
+              points,
               sentiment: sentimentFromChange(change),
             };
           } catch {
-            const fallback = STOCK_MINI_DATA.find((x) => x.symbol === safeSymbol);
-            return {
-              ...meta,
-              price: Number(fallback?.price || 0),
-              change: Number(fallback?.change || 0),
-              volume: 0,
-              points: fallback?.points || [10, 11, 10, 12, 13, 12, 14],
-            };
+            return null;
           }
         })
       );
 
       if (!alive) return;
-      setRows(nextRows.sort((a, b) => b.aiScore - a.aiScore));
+      const cleanRows = nextRows.filter((item) => item && Number.isFinite(item.price) && item.price > 0);
+      setRows(cleanRows.sort((a, b) => b.aiScore - a.aiScore));
       setLoading(false);
     };
 
@@ -1511,8 +1814,9 @@ const WatchlistPage = ({ watchlist = [], onToggleWatchlist = () => {}, onAddWatc
 
   const groupedBySector = useMemo(() => {
     const groups = rows.reduce((acc, item) => {
-      if (!acc[item.sector]) acc[item.sector] = [];
-      acc[item.sector].push(item);
+      const sectorName = String(item?.sector || "Unclassified");
+      if (!acc[sectorName]) acc[sectorName] = [];
+      acc[sectorName].push(item);
       return acc;
     }, {});
     return Object.keys(groups).map((sector) => ({ sector, items: groups[sector] }));
@@ -1823,41 +2127,160 @@ const PortfolioPage = ({ watchlist = [] }) => {
   );
 };
 
-const AIInsightsPage = () => {
+const AIInsightsPage = ({ watchlist = [], recentSearches = [] }) => {
   const { t } = useTranslation();
   const { theme } = useContext(ThemeContext);
   const dark = theme === "dark";
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [overview, setOverview] = useState({ sentiment: "-", sector: "-", topPick: "-", riskLevel: "-" });
+  const [signals, setSignals] = useState([]);
+  const [trending, setTrending] = useState([]);
+  const [sectors, setSectors] = useState([]);
+  const [rotation, setRotation] = useState([]);
+  const [summary, setSummary] = useState("");
+  const [radar, setRadar] = useState([]);
 
-  const overview = {
-    sentiment: "Greed",
-    sector: "Semiconductors",
-    topPick: "NVDA",
-    riskLevel: "Medium",
-  };
+  useEffect(() => {
+    let alive = true;
+    const cacheKey = JSON.stringify({
+      w: normalizeSymbolList(Array.isArray(watchlist) ? watchlist : []).slice(0, 8),
+      r: normalizeSymbolList(Array.isArray(recentSearches) ? recentSearches : []).slice(0, 8),
+    });
 
-  const signals = [
-    { symbol: "NVDA", signal: "Strong Buy", confidence: 86 },
-    { symbol: "AMD", signal: "Buy", confidence: 78 },
-    { symbol: "TSM", signal: "Hold", confidence: 65 },
-    { symbol: "INTC", signal: "Sell", confidence: 58 },
-  ];
+    const setFromSnapshot = (snapshot) => {
+      setOverview(snapshot.overview || { sentiment: "-", sector: "-", topPick: "-", riskLevel: "-" });
+      setSignals(snapshot.signals || []);
+      setSectors(snapshot.sectors || []);
+      setRotation(snapshot.rotation || []);
+      setSummary(snapshot.summary || "");
+      setRadar(snapshot.radar || []);
+      setTrending(snapshot.trending || []);
+    };
 
-  const trending = [
-    { symbol: "NVDA", momentum: "Strong", sentiment: "Bullish", aiScore: 92, points: [22, 24, 25, 27, 29, 31, 34] },
-    { symbol: "TSM", momentum: "Rising", sentiment: "Neutral", aiScore: 84, points: [20, 21, 21.5, 22, 23, 23.5, 24] },
-    { symbol: "AVGO", momentum: "Strong", sentiment: "Bullish", aiScore: 88, points: [18, 19, 20, 21, 22, 23, 24] },
-    { symbol: "MSFT", momentum: "Rising", sentiment: "Bullish", aiScore: 87, points: [25, 25.5, 26, 26.7, 27.1, 27.8, 28.4] },
-  ];
+    const cached = aiInsightsViewCache.get(cacheKey);
+    if (cached && (Date.now() - Number(cached.ts || 0)) < AI_INSIGHTS_CACHE_TTL_MS) {
+      setFromSnapshot(cached.data || {});
+      setLoading(false);
+    }
 
-  const sectors = [
-    { name: "Technology", momentum: 78 },
-    { name: "Semiconductors", momentum: 85 },
-    { name: "Energy", momentum: 46 },
-    { name: "Finance", momentum: 52 },
-  ];
+    const run = async () => {
+      if (!cached) setLoading(true);
+      setError("");
+      try {
+        const [summaryResult, pickerResult] = await Promise.allSettled([
+          fetchJsonWithRetry(
+            [apiUrl("/api/ai-summary"), localFastapiUrl("/api/ai-summary")],
+            1,
+            9000,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ context: { watchlist, recent_searches: recentSearches } }),
+            }
+          ),
+          fetchJsonWithRetry(
+            [apiUrl("/ai-picker?strategy=BALANCED&limit=8"), localFastapiUrl("/ai-picker?strategy=BALANCED&limit=8")],
+            1,
+            7000
+          ),
+        ]);
 
-  const summary =
-    "AI analysis shows strong momentum in semiconductor stocks driven by rising demand for AI infrastructure. Risk remains moderate while sector leadership continues to rotate toward compute and data-center suppliers.";
+        const summaryPayload = summaryResult.status === "fulfilled" ? summaryResult.value : null;
+        const pickerPayload = pickerResult.status === "fulfilled" ? pickerResult.value : { items: [] };
+
+        const summaryData = summaryPayload?.summary || {};
+        const pickerItems = Array.isArray(pickerPayload?.items) ? pickerPayload.items : [];
+        const topSymbols = normalizeSymbolList(pickerItems.map((item) => item?.ticker)).slice(0, 4);
+
+        const rankedSectors = Object.entries(summaryData?.sector_performance || {})
+          .map(([name, score]) => ({ name, momentum: Math.max(0, Math.min(100, Number(score) || 0)) }))
+          .sort((a, b) => b.momentum - a.momentum)
+          .slice(0, 6);
+
+        const signalRows = pickerItems.slice(0, 5).map((item) => {
+          const score = Number(item?.ai_score || 0);
+          return {
+            symbol: String(item?.ticker || "").toUpperCase(),
+            confidence: Math.max(35, Math.min(97, Math.round(55 + score * 0.4))),
+            signal: score >= 80 ? "Strong Buy" : score >= 60 ? "Buy" : score >= 40 ? "Hold" : "Sell",
+          };
+        });
+
+        if (!alive) return;
+        const snapshot = {
+          overview: {
+            sentiment: String(summaryData?.market_sentiment || "-"),
+            sector: String(summaryData?.trending_sector || "-"),
+            topPick: String(summaryData?.top_ai_pick || "-"),
+            riskLevel: String(summaryData?.risk_outlook || "-"),
+          },
+          signals: signalRows,
+          sectors: rankedSectors,
+          rotation: rankedSectors.slice(0, 2).map((item) => item.name),
+          summary: String(summaryData?.explanation || ""),
+          radar: topSymbols.slice(0, 3),
+          trending: [],
+        };
+
+        setFromSnapshot(snapshot);
+        aiInsightsViewCache.set(cacheKey, { ts: Date.now(), data: snapshot });
+
+        // Fetch trending mini charts in background so overview can render immediately.
+        Promise.allSettled(
+          topSymbols.map(async (symbol) => {
+            const history = await fetchJsonWithRetry(
+              [apiUrl(`/api/stock-history?ticker=${symbol}&period=1m`), localFastapiUrl(`/api/stock-history?ticker=${symbol}&period=1m`)],
+              1,
+              4500
+            );
+            const points = (Array.isArray(history) ? history : [])
+              .slice(-7)
+              .map((row) => Number(row?.price ?? row?.close ?? 0))
+              .filter((value) => Number.isFinite(value) && value > 0);
+            const picker = pickerItems.find((row) => String(row?.ticker || "").toUpperCase() === symbol);
+            return {
+              symbol,
+              momentum: momentumFromReturn(picker?.ret30),
+              sentiment: sentimentFromValue(picker?.sentiment),
+              aiScore: Math.round(Number(picker?.ai_score || 0)),
+              points,
+            };
+          })
+        ).then((rows) => {
+          if (!alive) return;
+          const trendRows = rows
+            .filter((row) => row.status === "fulfilled")
+            .map((row) => row.value)
+            .filter((row) => row && row.points?.length);
+          setTrending(trendRows);
+          aiInsightsViewCache.set(cacheKey, {
+            ts: Date.now(),
+            data: {
+              ...snapshot,
+              trending: trendRows,
+            },
+          });
+        });
+      } catch (e) {
+        if (!alive) return;
+        setError(e?.message || "Unable to load AI insights");
+        setOverview({ sentiment: "-", sector: "-", topPick: "-", riskLevel: "-" });
+        setSignals([]);
+        setTrending([]);
+        setSectors([]);
+        setRotation([]);
+        setSummary("");
+        setRadar([]);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    };
+    run();
+    return () => {
+      alive = false;
+    };
+  }, [watchlist, recentSearches]);
 
   return (
     <div className="space-y-6">
@@ -1866,23 +2289,29 @@ const AIInsightsPage = () => {
         <p className="text-slate-500">{t("aiInsightsSubtitle")}</p>
       </div>
 
+      {error ? (
+        <div className={`${dark ? "bg-rose-950/30 border-rose-900/50 text-rose-300" : "bg-rose-50 border-rose-200 text-rose-700"} rounded-2xl border p-4 text-sm font-medium`}>
+          {error}
+        </div>
+      ) : null}
+
       <AIOverviewCards overview={overview} dark={dark} />
 
       <div className="grid grid-cols-1 xl:grid-cols-[2fr,1fr] gap-5 items-start">
         <div className="space-y-5">
-          <AISignals signals={signals} dark={dark} />
-          <TrendingStocks stocks={trending} dark={dark} />
+          <AISignals signals={loading ? [] : signals} dark={dark} />
+          <TrendingStocks stocks={loading ? [] : trending} dark={dark} />
         </div>
 
         <div className="space-y-5 xl:sticky xl:top-20">
           <SectorInsights
             sectors={sectors}
-            rotation={["Semiconductors", "AI Infrastructure"]}
+            rotation={rotation}
             dark={dark}
           />
           <AIMarketSummary
             summary={summary}
-            radar={["NVDA", "TSM", "AVGO"]}
+            radar={radar}
             riskAlert={t("marketVolatilityIncreasing")}
             dark={dark}
           />
@@ -1974,12 +2403,13 @@ export default function App() {
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/verify" element={<VerifyEmailPage />} />
           <Route element={<PrivateLayout />}>
+            <Route path="/dashboard" element={<SearchPage watchlist={watchlist} onToggleWatchlist={toggleWatchSymbol} recentSearches={recentSearches} onRecordSearch={recordRecentSearch} />} />
             <Route path="/search" element={<SearchPage watchlist={watchlist} onToggleWatchlist={toggleWatchSymbol} recentSearches={recentSearches} onRecordSearch={recordRecentSearch} />} />
             <Route path="/stock/:symbol" element={<Stockdetail watchlist={watchlist} onToggleWatchlist={toggleWatchSymbol} />} />
             <Route path="/watchlist" element={<WatchlistPage watchlist={watchlist} onToggleWatchlist={toggleWatchSymbol} onAddWatchSymbol={addWatchSymbol} bookmarkedNews={bookmarkedNews} />} />
             <Route path="/risk" element={<RiskPage />} />
             <Route path="/ai-picker" element={<AIPickerPage />} />
-            <Route path="/ai-insights" element={<AIInsightsPage />} />
+            <Route path="/ai-insights" element={<AIInsightsPage watchlist={watchlist} recentSearches={recentSearches} />} />
             <Route path="/portfolio" element={<PortfolioPage watchlist={watchlist} onAddWatchSymbol={addWatchSymbol} />} />
             <Route path="/news" element={<NewsPage bookmarkedNews={bookmarkedNews} onToggleNewsBookmark={toggleNewsBookmark} />} />
           </Route>
@@ -1991,7 +2421,7 @@ export default function App() {
             watchlist,
             recent_searches: recentSearches,
             portfolio: watchlist.map((s) => ({ symbol: s })),
-            sentiment: 50,
+            sentiment: null,
           }}
           dark={theme === "dark"}
         />

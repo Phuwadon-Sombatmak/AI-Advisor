@@ -319,14 +319,38 @@ def _market_trend(spx_close: pd.Series) -> float:
 
 
 def _compute_internal_indicators(now: datetime) -> Dict[str, Any]:
-    spx = _sp500_close_series()
-    vix = _vix_close_series()
-    tnx = _treasury_close_series()
+    spx = None
+    vix = None
+    tnx = None
+    try:
+        spx = _sp500_close_series()
+    except Exception:
+        spx = None
+    try:
+        vix = _vix_close_series()
+    except Exception:
+        vix = None
+    try:
+        tnx = _treasury_close_series()
+    except Exception:
+        tnx = None
 
-    momentum = _market_momentum(spx)
-    strength = _stock_price_strength()
-    volatility = _market_volatility(vix)
-    safe_haven = _safe_haven_demand(spx, tnx)
+    try:
+        momentum = _market_momentum(spx) if spx is not None and len(spx) >= 130 else 50.0
+    except Exception:
+        momentum = 50.0
+    try:
+        strength = _stock_price_strength()
+    except Exception:
+        strength = 50.0
+    try:
+        volatility = _market_volatility(vix) if vix is not None and len(vix) >= 60 else 50.0
+    except Exception:
+        volatility = 50.0
+    try:
+        safe_haven = _safe_haven_demand(spx, tnx) if spx is not None and tnx is not None and len(spx) >= 25 and len(tnx) >= 25 else 50.0
+    except Exception:
+        safe_haven = 50.0
 
     # Final Fear & Greed Index from 4 independent indicators
     score = round((momentum + strength + volatility + safe_haven) / 4.0)
@@ -369,10 +393,10 @@ def compute_market_sentiment(force_refresh: bool = False) -> Dict[str, Any]:
     if cnn.get("ok"):
         score = int(clamp(cnn.get("score", 50)))
         indicators = (internal_payload or {}).get("indicators") or {
-            "momentum": score,
-            "strength": score,
-            "volatility": score,
-            "safeHaven": score,
+            "momentum": 50,
+            "strength": 50,
+            "volatility": 50,
+            "safeHaven": 50,
         }
         payload = {
             "score": score,

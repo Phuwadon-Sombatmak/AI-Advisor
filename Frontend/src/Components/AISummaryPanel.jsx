@@ -4,7 +4,6 @@ import { useTranslation } from "react-i18next";
 
 const ENDPOINTS = [
   "/api-fastapi/api/ai-summary",
-  "http://localhost:8000/api/ai-summary",
 ];
 
 async function postSummary(context) {

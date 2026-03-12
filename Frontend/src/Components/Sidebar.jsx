@@ -3,7 +3,7 @@ import { LayoutDashboard, Search, ShieldCheck, BriefcaseBusiness, Sparkles, News
 import { useTranslation } from "react-i18next";
 
 const ITEMS = [
-  { key: "dashboard", labelKey: "dashboard", icon: LayoutDashboard, path: "/search" },
+  { key: "dashboard", labelKey: "dashboard", icon: LayoutDashboard, path: "/dashboard" },
   { key: "stock", labelKey: "stockSearch", icon: Search, path: "/search" },
   { key: "watchlist", labelKey: "watchlist", icon: Star, path: "/watchlist" },
   { key: "risk", labelKey: "riskAnalysis", icon: ShieldCheck, path: "/risk" },
@@ -16,7 +16,7 @@ const ITEMS = [
 export default function Sidebar({ pathname, onNavigate, onLogout, logoutLabel = "Logout" }) {
   const { t } = useTranslation();
   const isActive = (key) => {
-    if (key === "dashboard") return pathname === "/search";
+    if (key === "dashboard") return pathname.startsWith("/dashboard");
     if (key === "stock") return pathname.startsWith("/search") || pathname.startsWith("/stock");
     if (key === "watchlist") return pathname.startsWith("/watchlist");
     if (key === "risk") return pathname.startsWith("/risk");
@@ -31,7 +31,7 @@ export default function Sidebar({ pathname, onNavigate, onLogout, logoutLabel = 
     <aside className="w-full md:w-[280px] bg-[#0F172A] text-slate-200 border-r border-slate-800 flex md:flex-col md:h-screen md:sticky md:top-0">
       <div className="hidden md:flex items-center px-6 py-6 border-b border-slate-800">
         <button
-          onClick={() => onNavigate("/search")}
+          onClick={() => onNavigate("/dashboard")}
           className="flex items-center gap-[10px] rounded-xl px-2 py-2 transition-all duration-200 hover:bg-slate-800 hover:-translate-y-0.5"
         >
           <img src="/Ail.svg?v=20260308" className="h-9 w-auto" alt="AI Invest Logo" />

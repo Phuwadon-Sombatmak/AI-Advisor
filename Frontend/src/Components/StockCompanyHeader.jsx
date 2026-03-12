@@ -1,0 +1,73 @@
+import React from "react";
+import { Building2, TrendingDown, TrendingUp } from "lucide-react";
+import { formatCurrencyUSD } from "../utils/formatters";
+
+function fmtNum(value, language = "en", digits = 2) {
+  const n = Number(value || 0);
+  return n.toLocaleString(language?.startsWith("th") ? "th-TH" : "en-US", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+export default function StockCompanyHeader({
+  profile = null,
+  symbol = "",
+  currentPrice = 0,
+  changeAbs = 0,
+  dailyChangePct = 0,
+  returnPct = 0,
+  rangeLabel = "1Y",
+  language = "en",
+  dark = false,
+}) {
+  const upToday = Number(dailyChangePct) >= 0;
+  const upRange = Number(returnPct) >= 0;
+  const name = profile?.name || symbol;
+  const ticker = profile?.ticker || symbol;
+  const exchange = profile?.exchange || "-";
+  const industry = profile?.industry || "-";
+  const logo = profile?.logo || null;
+
+  return (
+    <section className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-100"} p-8 rounded-3xl border shadow-sm`}>
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+        <div className="flex items-center gap-4 min-w-0">
+          <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-slate-50 border-slate-200"} h-10 w-10 rounded-xl border flex items-center justify-center overflow-hidden shrink-0`}>
+            {logo ? (
+              <img
+                src={logo}
+                alt={`${name} logo`}
+                className="h-full w-full object-cover"
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                  const fallback = e.currentTarget.parentElement?.querySelector("[data-fallback-logo]");
+                  if (fallback) fallback.classList.remove("hidden");
+                }}
+              />
+            ) : null}
+            <Building2 data-fallback-logo className={`${logo ? "hidden" : ""} ${dark ? "text-slate-400" : "text-slate-500"}`} size={18} />
+          </div>
+          <div className="min-w-0">
+            <h1 className={`${dark ? "text-slate-100" : "text-slate-900"} text-3xl font-black truncate`}>{name}</h1>
+            <p className="text-sm text-slate-500 font-semibold mt-1">{ticker} • {exchange}</p>
+            <p className="text-sm text-slate-500 mt-0.5 truncate">{industry}</p>
+          </div>
+        </div>
+
+        <div className="text-right">
+          <p className={`${dark ? "text-slate-100" : "text-slate-800"} text-5xl font-mono font-black`}>{formatCurrencyUSD(currentPrice, language)}</p>
+          <p className={`${upToday ? "text-[#22C55E]" : "text-[#EF4444]"} font-bold flex items-center justify-end gap-1 mt-2 text-lg`}>
+            {upToday ? <TrendingUp size={22} /> : <TrendingDown size={22} />}
+            {upToday ? "+" : ""}{fmtNum(changeAbs, language)} ({upToday ? "+" : ""}{fmtNum(dailyChangePct, language)}%)
+          </p>
+          <div className="mt-2 flex items-center justify-end gap-2">
+            <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${upRange ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+              {String(rangeLabel || "1Y").toUpperCase()} Return {upRange ? "+" : ""}{fmtNum(returnPct, language)}%
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}

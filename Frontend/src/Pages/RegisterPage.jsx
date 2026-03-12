@@ -4,6 +4,33 @@ import { LanguageContext } from "../Components/LanguageContext";
 import zxcvbn from "zxcvbn";
 import "./RegisterPage.css";
 
+const RECAPTCHA_SITE_KEY = "6Lc72B8sAAAAAPDSG1yY8RsQKvyqLyleDSh2wunz";
+const RECAPTCHA_SCRIPT_ID = "recaptcha-script";
+
+const loadRecaptchaScript = () =>
+    new Promise((resolve, reject) => {
+        if (window.grecaptcha?.execute) {
+            resolve(window.grecaptcha);
+            return;
+        }
+
+        const existing = document.getElementById(RECAPTCHA_SCRIPT_ID);
+        if (existing) {
+            existing.addEventListener("load", () => resolve(window.grecaptcha), { once: true });
+            existing.addEventListener("error", () => reject(new Error("Failed to load reCAPTCHA")), { once: true });
+            return;
+        }
+
+        const script = document.createElement("script");
+        script.id = RECAPTCHA_SCRIPT_ID;
+        script.src = `https://www.google.com/recaptcha/api.js?render=${RECAPTCHA_SITE_KEY}`;
+        script.async = true;
+        script.defer = true;
+        script.onload = () => resolve(window.grecaptcha);
+        script.onerror = () => reject(new Error("Failed to load reCAPTCHA"));
+        document.head.appendChild(script);
+    });
+
 export default function RegisterPage() {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
@@ -53,6 +80,12 @@ export default function RegisterPage() {
     
     useEffect(() => {
         setStartTime(Date.now()); // รีเซ็ตทุกครั้งที่เข้าเว็บ
+    }, []);
+
+    useEffect(() => {
+        loadRecaptchaScript().catch(() => {
+            // ไม่บังคับให้ขึ้น error ตอน mount เพื่อไม่รบกวน UX
+        });
     }, []);
 
     const validateEmail = (email) => /\S+@\S+\.\S+/.test(email);
@@ -134,11 +167,13 @@ export default function RegisterPage() {
         }
 
         try {
-            // เรียกใช้ reCAPTCHA (ต้องแน่ใจว่า import script ของ recaptcha มาแล้วใน index.html)
-            const token = await window.grecaptcha.execute(
-                "6Lc72B8sAAAAAPDSG1yY8RsQKvyqLyleDSh2wunz",
-                { action: "register" }
-            );
+            const grecaptcha = await loadRecaptchaScript();
+            if (!grecaptcha?.execute) {
+                setError("ไม่สามารถโหลดระบบยืนยันความปลอดภัยได้ กรุณาลองใหม่");
+                return;
+            }
+
+            const token = await grecaptcha.execute(RECAPTCHA_SITE_KEY, { action: "register" });
 
             const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
             console.log("Register API_URL:", API_URL);

@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 from sqlalchemy import text
 
 from init_db import SessionLocal, engine, Base
@@ -95,8 +96,8 @@ load_dotenv()
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
 NEWSAPI_KEY           = os.getenv("NEWSAPI_KEY")
 MARKETAUX_API_KEY     = os.getenv("MARKETAUX_API_KEY")
-FINNHUB_API_KEY       = os.getenv("FINNHUB_API_KEY") or os.getenv("FINNHUB_TOKEN") or "d6n5439r01qir35j79igd6n5439r01qir35j79j0"
-FMP_API_KEY           = os.getenv("FMP_API_KEY") or "vNscBiJm7dQavNkbVV7CZzpyfpSL0gH0"
+FINNHUB_API_KEY       = os.getenv("FINNHUB_API_KEY") or os.getenv("FINNHUB_TOKEN")
+FMP_API_KEY           = os.getenv("FMP_API_KEY")
 GEMINI_API_KEY        = os.getenv("GEMINI_API_KEY")
 
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
@@ -110,6 +111,7 @@ TICKERS = [
 cache_lock = threading.Lock()
 cache: Dict[str, Dict[str, Any]] = {}
 marketaux_news_cache: Dict[str, Dict[str, Any]] = {}
+stock_return_cache: Dict[str, Dict[str, Any]] = {}
 
 
 # NOTE: logger already configured above; avoid reconfiguring here
@@ -124,7 +126,14 @@ if HAS_RISK:
 app = FastAPI(title="AI Stock Sentiment API", version="3.0")
 # Configure CORS: prefer explicit allowed origins (from env FRONTEND_URL) to avoid wildcard+credentials issues
 frontend_url = os.getenv("FRONTEND_URL") or "http://localhost:5173"
-allowed_origins = [frontend_url, "http://localhost:5173", "http://127.0.0.1:5173"]
+allowed_origins = [
+    frontend_url,
+    "http://localhost",
+    "http://localhost:80",
+    "http://localhost:5173",
+    "http://127.0.0.1:80",
+    "http://127.0.0.1:5173",
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -139,9 +148,12 @@ Base.metadata.create_all(bind=engine)
 PORTFOLIO_QUOTE_CACHE_TTL = 30
 PORTFOLIO_META_CACHE_TTL = 3600
 PORTFOLIO_AI_CACHE_TTL = 300
+AI_SUMMARY_CACHE_TTL = 120
 portfolio_quote_cache: Dict[str, Dict[str, Any]] = {}
 portfolio_meta_cache: Dict[str, Dict[str, Any]] = {}
 portfolio_ai_cache: Dict[str, Dict[str, Any]] = {}
+ai_summary_cache: Dict[str, Dict[str, Any]] = {}
+stock_stats_cache: Dict[str, Dict[str, Any]] = {}
 
 @app.get("/")
 async def root():
@@ -208,6 +220,27 @@ def safe_float(x):
         return float(x)
     except Exception:
         return 0.0
+
+
+def normalize_symbol(symbol: str) -> str:
+    raw = str(symbol or "").strip().upper()
+    if not raw:
+        return ""
+    # Normalize common separator variants while preserving class shares (e.g. BRK.A / BRK-B)
+    raw = re.sub(r"\s+", "", raw)
+    return raw
+
+
+def normalize_symbol_list(symbols: List[str]) -> List[str]:
+    cleaned: List[str] = []
+    seen = set()
+    for sym in symbols or []:
+        normalized = normalize_symbol(sym)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        cleaned.append(normalized)
+    return cleaned
     
 # =========================
 # AI Quant Scoring
@@ -711,15 +744,17 @@ def _history_params(range_value: str):
     if key == "1d":
         return {"period": "1d", "resolution": "5", "days": 1}
     if key == "5d":
-        return {"period": "5d", "resolution": "30", "days": 5}
+        # Fetch wider calendar window, then keep 5 trading sessions.
+        return {"period": "5d", "resolution": "30", "days": 9}
     if key in {"1m", "1mo"}:
-        return {"period": "1mo", "resolution": "D", "days": 31}
+        # 1M return baseline should reflect ~30 trading closes.
+        return {"period": "1mo", "resolution": "D", "days": 45}
     if key in {"3m", "3mo"}:
-        return {"period": "3mo", "resolution": "D", "days": 93}
+        return {"period": "3mo", "resolution": "D", "days": 135}
     if key in {"6m", "6mo"}:
-        return {"period": "6mo", "resolution": "D", "days": 186}
+        return {"period": "6mo", "resolution": "D", "days": 270}
     if key == "1y":
-        return {"period": "1y", "resolution": "D", "days": 370}
+        return {"period": "1y", "resolution": "D", "days": 365}
     if key == "5y":
         return {"period": "5y", "resolution": "D", "days": 365 * 5 + 10}
     if key == "ytd":
@@ -898,16 +933,16 @@ def _fetch_yfinance_history(symbol: str, range_value: str):
     key = (range_value or "3mo").strip().lower()
     ticker = yf.Ticker(symbol)
     if key == "1d":
-        hist = ticker.history(period="1d", interval="5m")
+        hist = ticker.history(period="1d", interval="5m", auto_adjust=False, prepost=False, actions=False)
         intraday = True
         period = "1d"
     elif key == "5d":
-        hist = ticker.history(period="5d", interval="30m")
+        hist = ticker.history(period="5d", interval="30m", auto_adjust=False, prepost=False, actions=False)
         intraday = True
         period = "5d"
     else:
         period = _normalize_range(range_value)
-        hist = ticker.history(period=period)
+        hist = ticker.history(period=period, interval="1d", auto_adjust=False, prepost=False, actions=False)
         intraday = False
 
     rows = []
@@ -963,47 +998,70 @@ def _fetch_yfinance_previous_close(symbol: str) -> float:
 
 def get_stock_data(symbol: str, range_value: str = "3mo"):
     try:
-        provider = "Finnhub"
+        provider = "Unknown"
         latest_price = 0.0
         previous_close = 0.0
         company_name = symbol
         history = []
         normalized_period = _normalize_range(range_value)
+        quote_provider = None
+        history_provider = None
 
+        # 1) Prefer Finnhub quote/profile for latest price (if key allows)
         try:
             quote = _finnhub_get("/quote", {"symbol": symbol})
             profile = _finnhub_get("/stock/profile2", {"symbol": symbol})
-            history, normalized_period = _fetch_finnhub_candles(symbol, range_value)
             latest_price = safe_float(quote.get("c"))
             previous_close = safe_float(quote.get("pc"))
             company_name = str(profile.get("name") or symbol)
-        except Exception as finnhub_error:
-            logger.warning(f"Finnhub fallback to FMP for {symbol}: {finnhub_error}")
-            provider = "FMP"
+            quote_provider = "Finnhub"
+        except Exception as finnhub_quote_error:
+            logger.warning(f"Finnhub quote/profile unavailable for {symbol}: {finnhub_quote_error}")
             try:
                 fmp_quote = _fetch_fmp_quote(symbol)
-                history, normalized_period = _fetch_fmp_history(symbol, range_value)
                 latest_price = safe_float(fmp_quote.get("price"))
                 previous_close = safe_float(fmp_quote.get("previous_close"))
                 company_name = str(fmp_quote.get("name") or symbol)
+                quote_provider = "FMP"
+            except Exception as fmp_quote_error:
+                logger.warning(f"FMP quote/profile unavailable for {symbol}: {fmp_quote_error}")
+
+        # 2) Prefer Finnhub candles for history, then FMP, then Yahoo
+        try:
+            history, normalized_period = _fetch_finnhub_candles(symbol, range_value)
+            history_provider = "Finnhub"
+        except Exception as finnhub_candle_error:
+            logger.warning(f"Finnhub fallback to FMP for {symbol}: {finnhub_candle_error}")
+            try:
+                history, normalized_period = _fetch_fmp_history(symbol, range_value)
+                history_provider = "FMP"
             except Exception as fmp_error:
                 logger.warning(f"FMP fallback to Yahoo for {symbol}: {fmp_error}")
-                provider = "YahooFallback"
                 last_yf_error = None
                 for yf_symbol in _symbol_variants(symbol):
                     try:
                         history, normalized_period = _fetch_yfinance_history(yf_symbol, range_value)
                         if history:
-                            closes = [safe_float(x.get("close")) for x in history if safe_float(x.get("close")) > 0]
-                            latest_price = closes[-1] if closes else 0.0
-                            previous_close = _fetch_yfinance_previous_close(yf_symbol) or _infer_previous_close_from_history(history)
-                            company_name = yf_symbol
+                            if not company_name or company_name == symbol:
+                                company_name = yf_symbol
+                            if previous_close <= 0:
+                                previous_close = _fetch_yfinance_previous_close(yf_symbol) or _infer_previous_close_from_history(history)
+                            history_provider = "YahooFallback"
                             break
                     except Exception as yf_error:
                         last_yf_error = yf_error
                         continue
                 if not history and last_yf_error:
                     raise HTTPException(status_code=500, detail=f"Yahoo fallback error: {last_yf_error}")
+
+        if quote_provider and history_provider:
+            provider = quote_provider if quote_provider == history_provider else f"{quote_provider}+{history_provider}"
+        elif quote_provider:
+            provider = quote_provider
+        elif history_provider:
+            provider = history_provider
+        else:
+            provider = "Unavailable"
 
         if not history:
             raise HTTPException(status_code=404, detail=f"No market candles for {symbol}")
@@ -1311,15 +1369,29 @@ def compute_recommendation(symbol: str,
 @app.get("/ai-picker")
 def ai_stock_picker(
     strategy: str = Query("BALANCED", description="AGGRESSIVE | BALANCED | DEFENSIVE"),
-    limit: int = Query(5, ge=1, le=20)
+    limit: int = Query(5, ge=1, le=50)
 ):
     if not HAS_AI_PICKER:
         raise HTTPException(status_code=503, detail="AI Picker module offline")
     
     try:
-        picks = get_ai_picks(strategy.upper(), limit)
+        strategy_raw = str(strategy or "").strip().upper()
+        strategy_alias = {
+            "GROWTH": "AGGRESSIVE",
+            "MOMENTUM": "AGGRESSIVE",
+            "AI_TREND": "AGGRESSIVE",
+            "AI-TREND": "AGGRESSIVE",
+            "VALUE": "DEFENSIVE",
+            "LOW_RISK": "DEFENSIVE",
+            "LOW-RISK": "DEFENSIVE",
+        }
+        normalized_strategy = strategy_alias.get(strategy_raw, strategy_raw)
+        if normalized_strategy not in {"AGGRESSIVE", "BALANCED", "DEFENSIVE"}:
+            normalized_strategy = "BALANCED"
+
+        picks = get_ai_picks(normalized_strategy, limit)
         return {
-            "strategy": strategy.upper(),
+            "strategy": normalized_strategy,
             "items": picks,
             "count": len(picks),
             "timestamp": datetime.now().isoformat()
@@ -1379,10 +1451,37 @@ def _mask_key(key: Optional[str]) -> str:
     return f"{raw[:4]}...{raw[-4:]}"
 
 
+def _default_active_symbols(limit: int = 5) -> List[str]:
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT ticker, MAX(last_updated) AS last_ts
+                    FROM prices
+                    WHERE ticker IS NOT NULL AND ticker <> ''
+                    GROUP BY ticker
+                    ORDER BY last_ts DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"limit": int(limit)},
+            ).mappings().all()
+        symbols = []
+        for row in rows:
+            ticker = str(row.get("ticker") or "").strip().upper()
+            if ticker and ticker not in symbols:
+                symbols.append(ticker)
+        return symbols
+    except Exception as e:
+        logger.warning(f"Unable to load active symbols from DB: {e}")
+        return []
+
+
 @app.get("/providers/status")
 @app.get("/api/providers/status")
 def providers_status():
-    sample_symbol = "AAPL"
+    sample_symbol = (_default_active_symbols(1) or ["SPY"])[0]
     out: Dict[str, Any] = {
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "sample_symbol": sample_symbol,
@@ -1462,7 +1561,9 @@ def news_endpoint(symbols: str, days_back: int = 7):
 
 @app.get("/api/news")
 def news_api_compat():
-    default_symbols = ["NVDA", "MSFT", "AAPL"]
+    default_symbols = _default_active_symbols(3)
+    if not default_symbols:
+        raise HTTPException(status_code=503, detail="No active symbols available for news feed")
     data = get_newsapi_news_batch(default_symbols, 3, 7)
     merged = []
     for row in data:
@@ -1850,28 +1951,38 @@ def _calculate_portfolio_overview(user_id: int, range_value: str = "1m") -> Dict
 def _parse_symbol_from_question(question: str, context: AIAdvisorContext) -> Optional[str]:
     q = (question or "").upper().replace("$", " ")
     raw_tokens = [w.strip(" ,.?/\\|()[]{}:;!") for w in q.split()]
+    stopwords = {
+        "IS", "ARE", "WAS", "WERE", "A", "AN", "THE", "THIS", "THAT", "THESE", "THOSE",
+        "WHAT", "HOW", "ABOUT", "WITH", "FOR", "SHOW", "COMPARE", "VS", "VERSUS",
+        "STOCK", "STOCKS", "MARKET", "SECTOR", "SECTORS", "RISK", "NEWS", "TODAY", "NOW",
+    }
     candidates = []
     for token in raw_tokens:
         if not token:
             continue
-        if token in TICKERS:
-            candidates.append(token)
-            continue
         compact = "".join(ch for ch in token if ch.isalnum() or ch in {".", "-"})
-        if 1 <= len(compact) <= 8:
+        if compact in stopwords:
+            continue
+        if 2 <= len(compact) <= 10:
             candidates.append(compact)
-    for c in candidates:
-        if c in TICKERS or c in (context.watchlist or []):
-            return c
-    return None
+    if candidates:
+        return normalize_symbol(candidates[0])
+    return normalize_symbol_list(context.watchlist or [])[0] if (context.watchlist or []) else None
 
 
 def _extract_ticker_candidates(question: str) -> List[str]:
     q = str(question or "").upper()
-    candidates = re.findall(r"\b[A-Z]{1,5}(?:[.-][A-Z])?\b", q)
+    candidates = re.findall(r"\b[A-Z]{2,5}(?:[.-][A-Z])?\b", q)
+    stopwords = {
+        "VS", "AND", "OR", "THE", "THIS", "THAT", "WITH", "FOR", "WHAT", "ABOUT",
+        "SHOW", "TOP", "RISK", "NEWS", "MARKET", "SECTOR", "SECTORS", "STOCK",
+        "STOCKS", "TODAY", "NOW", "BEST", "IS", "ARE", "WAS", "WERE", "AN",
+    }
     out = []
     seen = set()
     for c in candidates:
+        if c in stopwords:
+            continue
         if c in seen:
             continue
         seen.add(c)
@@ -1880,7 +1991,7 @@ def _extract_ticker_candidates(question: str) -> List[str]:
 
 
 def _extract_comparison_symbols(question: str, context: AIAdvisorContext) -> List[str]:
-    explicit = [s for s in _extract_ticker_candidates(question) if s in TICKERS or s in (context.watchlist or [])]
+    explicit = normalize_symbol_list(_extract_ticker_candidates(question))
     if len(explicit) >= 2:
         return explicit[:2]
 
@@ -1988,6 +2099,303 @@ def _classify_intent(question: str) -> str:
     return "unclear_query"
 
 
+def _classify_intent_category(question: str, intent: str) -> str:
+    q = (question or "").strip().lower()
+    sector_terms = [
+        "sector", "sectors", "industry", "energy", "semiconductor", "technology", "finance", "healthcare",
+        "กลุ่ม", "เซกเตอร์", "หมวด", "พลังงาน", "อุตสาหกรรม",
+    ]
+    risk_terms = ["risk", "risks", "downside", "weaken", "drawdown", "ความเสี่ยง", "อ่อนตัว", "อ่อนแอ", "ขาลง"]
+    sentiment_terms = ["sentiment", "fear", "greed", "ความเชื่อมั่น", "กลัว", "โลภ"]
+    momentum_terms = ["momentum", "strong momentum", "leaders", "laggards", "แรง", "โมเมนตัม", "นำตลาด"]
+    portfolio_terms = ["portfolio", "holdings", "allocation", "watchlist", "พอร์ต", "สัดส่วน", "ถืออยู่"]
+
+    if any(t in q for t in risk_terms):
+        return "Risk Analysis"
+    if any(t in q for t in momentum_terms) and any(t in q for t in sector_terms):
+        return "Sector Momentum"
+    if any(t in q for t in sentiment_terms):
+        return "Market Sentiment"
+    if any(t in q for t in portfolio_terms):
+        return "Portfolio Analysis"
+    if intent in {"single_stock_analysis", "stock_comparison"}:
+        return "Stock Analysis"
+    if intent in {"sector_stock_picker", "sector_analysis", "sector_explanation"}:
+        return "Sector Momentum"
+    if intent in {"market_overview", "risk_explanation"}:
+        return "Risk Analysis"
+    return "Stock Analysis"
+
+
+def _is_sector_reference(question: str, context: AIAdvisorContext) -> bool:
+    q = (question or "").lower()
+    if _extract_sector_from_text(q):
+        return True
+    ref_terms = ["this sector", "that sector", "in this sector", "กลุ่มนี้", "เซกเตอร์นี้", "หมวดนี้"]
+    if any(t in q for t in ref_terms):
+        last_sector = str((context.chat_state or {}).get("last_sector") or "").strip()
+        return bool(last_sector)
+    return False
+
+
+def _select_analysis_engine(
+    *,
+    question: str,
+    intent: str,
+    intent_category: str,
+    explicit_symbol: Optional[str],
+    context: AIAdvisorContext,
+) -> str:
+    if intent_category == "Risk Analysis":
+        if explicit_symbol:
+            return "stock_risk_engine"
+        if _is_sector_reference(question, context):
+            return "sector_risk_engine"
+        return "market_risk_engine"
+    if intent == "stock_comparison":
+        return "stock_comparison_engine"
+    if intent == "sector_stock_picker":
+        return "sector_stock_picker_engine"
+    if intent in {"sector_analysis", "sector_explanation"}:
+        return "sector_analysis_engine"
+    if intent == "portfolio_advice":
+        return "portfolio_analysis_engine"
+    if intent == "single_stock_analysis":
+        return "stock_analysis_engine"
+    return "general_engine"
+
+
+def _build_stock_risk_response(
+    symbol: str,
+    stock_result: Dict[str, Any],
+    market: Dict[str, Any],
+) -> Dict[str, Any]:
+    analysis = stock_result.get("analysis", {})
+    raw = stock_result.get("raw", {}) or {}
+    technical = analysis.get("indicators", {}) or {}
+    signals = raw.get("signals", {}) or {}
+    sentiment_avg = safe_float(raw.get("sentiment_avg", 0.0))
+    sentiment_label = "Bullish" if sentiment_avg > 0.15 else ("Bearish" if sentiment_avg < -0.15 else "Neutral")
+    momentum_score = safe_float(signals.get("momentum_score", 50.0))
+    momentum_label = "Weakening" if momentum_score < 50 else ("Moderate" if momentum_score < 70 else "Strong")
+    technical_trend = str(analysis.get("technical_trend", "Neutral"))
+    fear_greed = safe_float(market.get("market_score", 50.0))
+    fear_label = str(market.get("market_label", "Neutral"))
+    sector = _sector_for_symbol(symbol)
+
+    key_risks = [
+        "Valuation Risk: current pricing may be sensitive to earnings-expectation resets.",
+        "Demand Cyclicality: end-market spending slowdowns can reduce growth momentum.",
+        "Competition Risk: peer pressure can compress margins and pricing power.",
+        "Supply Chain / Geopolitical Risk: disruptions can affect production and delivery.",
+    ]
+    if sector == "Semiconductors":
+        key_risks = [
+            "Valuation Risk: semiconductor multiples can compress quickly when growth slows.",
+            "AI Demand Cyclicality: hyperscaler capex normalization may reduce chip demand.",
+            "Competition Risk: AMD/other accelerators can pressure share and margins.",
+            "Supply Chain / Geopolitical Risk: foundry concentration and export controls add uncertainty.",
+        ]
+    elif sector == "Technology":
+        key_risks = [
+            "Valuation Risk: large-cap tech remains sensitive to rate and multiple compression.",
+            "Demand Cyclicality: enterprise/cloud spending softness may reduce topline momentum.",
+            "Competition Risk: product-cycle intensity can pressure market share and margins.",
+            "Regulatory Risk: antitrust and data-policy pressure can affect growth optionality.",
+        ]
+
+    short_term = "High" if momentum_score < 45 or fear_greed < 30 else ("Medium" if momentum_score < 65 or fear_greed < 50 else "Low")
+    long_term = "Low" if sector in {"Technology", "Semiconductors"} else "Medium"
+    confidence = int(max(55, min(90, analysis.get("confidence", 75))))
+
+    answer = (
+        f"Stock Risk Analysis: {symbol}\n\n"
+        "Key Risks\n"
+        + "\n".join([f"- {x}" for x in key_risks]) + "\n\n"
+        "Market Signals\n"
+        f"- {symbol} price trend: {technical_trend}\n"
+        f"- Momentum: {momentum_label} ({momentum_score:.1f}/100)\n"
+        f"- Fear & Greed: {fear_greed:.0f} ({fear_label})\n"
+        f"- News sentiment: {sentiment_label} ({sentiment_avg:+.2f})\n"
+        f"- RSI: {safe_float(technical.get('rsi')):.2f}\n\n"
+        "Impact Assessment\n"
+        f"- Short-term downside risk: {short_term}\n"
+        f"- Long-term structural risk: {long_term}\n\n"
+        f"Confidence\n- {confidence}%"
+    )
+    followups = [
+        f"Which risk is most critical for {symbol} now?",
+        f"How does {symbol} downside risk compare vs sector peers?",
+        f"What signals would reduce {symbol} risk?",
+    ]
+    schema = {
+        "intent": "risk_analysis",
+        "answer_title": f"Stock Risk Analysis: {symbol}",
+        "direct_answer": f"Main downside risks for {symbol} are valuation sensitivity, demand cyclicality, competition, and supply-chain/geopolitical exposure.",
+        "summary_points": key_risks,
+        "market_signals": {
+            "price_trend": technical_trend,
+            "momentum_score": round(momentum_score, 1),
+            "fear_greed_score": round(fear_greed, 1),
+            "fear_greed_label": fear_label,
+            "news_sentiment": round(sentiment_avg, 3),
+            "rsi": round(safe_float(technical.get("rsi")), 2),
+        },
+        "impact_assessment": {
+            "short_term_downside_risk": short_term,
+            "long_term_structural_risk": long_term,
+        },
+        "risks": key_risks,
+        "confidence": confidence,
+        "sources": stock_result.get("sources", ["Finnhub", "Market News", "Internal Technical Model"]),
+        "followups": followups,
+    }
+    return {"answer": answer, "schema": schema, "followups": followups}
+
+
+def _build_market_risk_response(market: Dict[str, Any]) -> Dict[str, Any]:
+    fg = safe_float(market.get("market_score", 50.0))
+    label = str(market.get("market_label", "Neutral"))
+    top_sector = str((market.get("sector_momentum") or {}).get("sector", "Technology"))
+    top_momentum = str((market.get("sector_momentum") or {}).get("momentum", "Moderate"))
+    short_term = "High" if fg < 30 else ("Medium" if fg < 55 else "Low")
+    answer = (
+        "Market Risk Analysis\n\n"
+        "Key Risks\n"
+        "- Liquidity and macro policy shocks can increase index-level drawdown risk.\n"
+        "- Growth slowdown risk can pressure earnings revisions.\n"
+        "- Risk-off regime can widen volatility and correlation.\n\n"
+        "Market Signals\n"
+        f"- Fear & Greed: {fg:.0f} ({label})\n"
+        f"- Leading sector momentum: {top_sector} ({top_momentum})\n\n"
+        "Impact Assessment\n"
+        f"- Short-term downside risk: {short_term}\n"
+        "- Long-term structural risk: policy and growth-cycle uncertainty\n\n"
+        "Confidence\n- 70%"
+    )
+    followups = [
+        "What risks could weaken this sector?",
+        "Show top momentum stocks in this sector",
+        "Which sectors are defensive now?",
+    ]
+    schema = {
+        "intent": "risk_analysis",
+        "answer_title": "Market Risk Analysis",
+        "direct_answer": "Current downside risk is driven by macro/liquidity pressure and sentiment regime.",
+        "summary_points": [
+            "Macro and liquidity shocks can increase volatility.",
+            "Earnings downgrade risk remains a key downside driver.",
+            "Risk-off sentiment can amplify sector rotation.",
+        ],
+        "impact_assessment": {
+            "short_term_downside_risk": short_term,
+            "long_term_structural_risk": "Medium",
+        },
+        "confidence": 70,
+        "sources": ["Fear & Greed Model", "Sector ETF Model", "Market News"],
+        "followups": followups,
+    }
+    return {"answer": answer, "schema": schema, "followups": followups}
+
+
+def _build_sector_risk_response(
+    question: str,
+    sector: str,
+    market: Dict[str, Any],
+    top_sector_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    etf_map = {
+        "Energy": "XLE",
+        "Semiconductors": "SOXX",
+        "Technology": "XLK",
+        "Finance": "XLF",
+        "Healthcare": "XLV",
+    }
+    etf = etf_map.get(sector, "XLK")
+    etf_ret_3m = safe_float(top_sector_data.get("return_3m_pct", 0.0))
+    etf_mom = safe_float(top_sector_data.get("momentum_score", 50.0))
+    sentiment = safe_float(top_sector_data.get("news_sentiment", 0.0))
+    sentiment_label = "Bullish" if sentiment > 0.15 else ("Bearish" if sentiment < -0.15 else "Neutral")
+    fear_greed = safe_float(market.get("market_score", 50.0))
+    regime = str(market.get("market_label", "Neutral"))
+
+    if etf_mom < 45 or fear_greed < 35:
+        impact = "High"
+    elif etf_mom < 60 or fear_greed < 50:
+        impact = "Medium"
+    else:
+        impact = "Low"
+
+    key_risks = [
+        "Commodity price downside can pressure sector earnings and margins.",
+        "Global demand slowdown can reduce volume growth and pricing power.",
+        "Policy/regulatory shifts can change long-term capital allocation trends.",
+    ]
+    if sector == "Semiconductors":
+        key_risks = [
+            "Inventory correction and capex slowdown can pressure revenue growth.",
+            "Geopolitical/export restrictions can disrupt supply chain demand.",
+            "Valuation compression risk remains elevated if growth expectations reset.",
+        ]
+    elif sector == "Technology":
+        key_risks = [
+            "Rate-sensitive valuation pressure can reduce upside multiples.",
+            "Enterprise spending slowdown can impact software and cloud growth.",
+            "Regulatory and antitrust pressure can affect large-cap leadership.",
+        ]
+    elif sector == "Finance":
+        key_risks = [
+            "Credit quality deterioration can increase provisioning costs.",
+            "Yield curve shifts can pressure net interest margins.",
+            "Regulatory tightening can limit capital return flexibility.",
+        ]
+
+    answer = (
+        f"Sector Risk Analysis: {sector}\n\n"
+        "Key Risks\n"
+        + "\n".join([f"- {x}" for x in key_risks]) + "\n\n"
+        "Macro Factors\n"
+        f"- Fear & Greed regime: {regime} ({fear_greed:.0f})\n"
+        f"- Sector ETF ({etf}) 3M return: {etf_ret_3m:+.2f}%\n"
+        f"- Sector news sentiment: {sentiment_label} ({sentiment:+.2f})\n\n"
+        "Market Signals\n"
+        f"- {etf} momentum score: {etf_mom:.1f}/100\n"
+        f"- Market risk outlook: {market.get('risk_outlook', 'Medium')}\n\n"
+        "Impact Assessment\n"
+        f"- Short-term risk: {impact}\n"
+        "- Long-term risk: structural transition and macro-policy uncertainty\n\n"
+        f"Confidence\n- {74 if impact == 'Medium' else (80 if impact == 'High' else 70)}%"
+    )
+
+    followups = [
+        f"Show top momentum stocks in {sector}",
+        f"Which {sector} names are lower-risk now?",
+        f"How does {sector} risk compare vs Technology?",
+    ]
+    schema = {
+        "intent": "sector_risk",
+        "answer_title": f"Sector Risk Analysis: {sector}",
+        "direct_answer": f"Main downside risks for {sector} are demand sensitivity, macro regime pressure, and policy transition risk.",
+        "summary_points": key_risks,
+        "market_signals": {
+            "fear_greed": round(fear_greed, 1),
+            "sector_etf": etf,
+            "sector_etf_return_3m_pct": round(etf_ret_3m, 2),
+            "sector_momentum_score": round(etf_mom, 1),
+            "sector_news_sentiment": round(sentiment, 3),
+        },
+        "impact_assessment": {
+            "short_term": impact,
+            "long_term": "Structural transition / policy sensitivity",
+        },
+        "risks": key_risks,
+        "confidence": 74 if impact == "Medium" else (80 if impact == "High" else 70),
+        "sources": ["Finnhub", "Sector ETF Model", "Market News", "Fear & Greed Model"],
+        "followups": followups,
+    }
+    return {"answer": answer, "schema": schema, "followups": followups}
+
+
 def _build_followup_prompts(intent: str, symbol: Optional[str], top_sector: Optional[str] = None) -> List[str]:
     sym = str(symbol or "").upper().strip()
     sector = str(top_sector or "Technology")
@@ -2014,6 +2422,12 @@ def _build_followup_prompts(intent: str, symbol: Optional[str], top_sector: Opti
             f"Show top momentum stocks in {sector}",
             f"What risks could weaken {sector}?",
             f"Is {sector} still attractive overall?",
+        ]
+    if intent == "sector_risk":
+        return [
+            f"Show top momentum stocks in {sector}",
+            f"Which {sector} names are lower-risk now?",
+            f"How does {sector} risk compare vs Technology?",
         ]
     if intent == "sector_analysis":
         return [
@@ -2050,6 +2464,18 @@ def _build_answer_schema(
 ) -> Dict[str, Any]:
     recommendation = signal or str(analysis.get("recommendation") or "Hold")
     stance = str(analysis.get("news_sentiment") or "Neutral")
+    ticker = str(analysis.get("ticker") or "N/A")
+    company_name = str(analysis.get("company_name") or ticker)
+    sector = str(analysis.get("sector") or "N/A")
+    industry = str(analysis.get("industry") or "N/A")
+    price = safe_float(analysis.get("current_price", 0))
+    price_change = safe_float(analysis.get("price_change", 0))
+    momentum = str(analysis.get("momentum") or "Moderate")
+    technical_trend = str(analysis.get("technical_trend") or "Neutral")
+    sentiment = str(analysis.get("news_sentiment") or "Neutral")
+    fear_greed = safe_float(market.get("market_score", 50))
+    market_label = str(market.get("market_label", "Neutral"))
+    analyst_target = analysis.get("analyst_target")
     forecast = analysis.get("forecast_horizon", {"7d": 0, "30d": 0, "90d": 0})
     if recommendation.lower().startswith("strong buy"):
         stance = "Bullish"
@@ -2073,12 +2499,12 @@ def _build_answer_schema(
 
     return {
         "intent": intent,
-        "answer_title": analysis.get("ticker") or "Investment View",
+        "answer_title": f"{company_name} ({ticker})",
         "direct_answer": (
-            f"{analysis.get('ticker') or 'Market'} view is {recommendation} based on current confirmed signals."
+            f"Based on current technical and sentiment data, {company_name} ({ticker}) is {recommendation}."
         ),
         "summary": (
-            f"{analysis.get('ticker') or 'Market'} view is {recommendation} with "
+            f"{company_name} ({ticker}) view is {recommendation} with "
             f"{analysis.get('confidence', 70)}% confidence under current signals."
         ),
         "stance": stance,
@@ -2086,6 +2512,31 @@ def _build_answer_schema(
         "risks": risks[:4],
         "actionable_view": recommendation,
         "confidence": int(analysis.get("confidence", 70)),
+        "stock_overview": {
+            "company_name": company_name,
+            "ticker": ticker,
+            "sector": sector,
+            "industry": industry,
+            "price": round(price, 2) if price > 0 else None,
+            "price_change": round(price_change, 2),
+        },
+        "market_signals": {
+            "technical_trend": technical_trend,
+            "momentum": momentum,
+            "news_sentiment": sentiment,
+            "fear_greed_index": round(fear_greed, 1),
+            "market_regime": market_label,
+            "analyst_target": analyst_target if analyst_target not in ("", None) else None,
+        },
+        "investment_view": {
+            "recommendation": recommendation,
+            "confidence": int(analysis.get("confidence", 70)),
+            "forecast_horizon": {
+                "7d": round(safe_float(forecast.get("7d")), 2),
+                "30d": round(safe_float(forecast.get("30d")), 2),
+                "90d": round(safe_float(forecast.get("90d")), 2),
+            },
+        },
         "forecast_horizon": {
             "7d": round(safe_float(forecast.get("7d")), 2),
             "30d": round(safe_float(forecast.get("30d")), 2),
@@ -2274,6 +2725,15 @@ SECTOR_STOCK_UNIVERSE: Dict[str, List[str]] = {
     "Healthcare": ["LLY", "JNJ", "UNH", "PFE", "MRK", "ABT"],
 }
 
+SECTOR_ETF_MAP: Dict[str, str] = {
+    "Technology": "XLK",
+    "Semiconductors": "SOXX",
+    "Energy": "XLE",
+    "Healthcare": "XLV",
+    "Financials": "XLF",
+    "Finance": "XLF",
+}
+
 
 def _extract_sector_from_text(text: str) -> Optional[str]:
     q = (text or "").lower()
@@ -2313,40 +2773,89 @@ def _rank_sector_stock_momentum(sector: str) -> Dict[str, Any]:
     symbols = SECTOR_STOCK_UNIVERSE.get(sector, [])
     ranked: List[Dict[str, Any]] = []
     missing = 0
+    spy_ret_3m = 0.0
+    try:
+        spy_data = get_stock_data("SPY", "3m")
+        spy_hist = spy_data.get("history", [])
+        if len(spy_hist) >= 2:
+            spy_first = safe_float(spy_hist[0].get("close"))
+            spy_last = safe_float(spy_hist[-1].get("close"))
+            if spy_first > 0:
+                spy_ret_3m = ((spy_last - spy_first) / spy_first) * 100.0
+    except Exception:
+        spy_ret_3m = 0.0
+
+    def _momentum_label(score: float) -> str:
+        if score >= 70:
+            return "Strong"
+        if score >= 50:
+            return "Moderate"
+        return "Weak"
+
     for sym in symbols:
         try:
-            data = get_stock_data(sym, "1m")
-            hist = data.get("history", [])
-            if len(hist) < 12:
+            data_3m = get_stock_data(sym, "3m")
+            hist_3m = data_3m.get("history", [])
+            if len(hist_3m) < 20:
                 missing += 1
                 continue
-            first = safe_float(hist[0].get("close"))
-            last = safe_float(hist[-1].get("close"))
+            first = safe_float(hist_3m[0].get("close"))
+            last = safe_float(hist_3m[-1].get("close"))
             if first <= 0 or last <= 0:
                 missing += 1
                 continue
-            ret_1m = ((last - first) / first) * 100.0
-            news_rows = get_newsapi_news_batch([sym], limit_per_symbol=5, days_back=7)
-            news_items = (news_rows[0].get("news", []) if news_rows else [])[:5]
-            sentiment_values = [safe_float(n.get("sentiment_score", 0.0)) for n in news_items]
-            sentiment_avg = (sum(sentiment_values) / len(sentiment_values)) if sentiment_values else 0.0
+            ret_3m = ((last - first) / first) * 100.0
+            rel_strength = ret_3m - spy_ret_3m
+
+            data_6m = get_stock_data(sym, "6m")
+            hist_6m = data_6m.get("history", [])
+            closes_6m = [safe_float(h.get("close")) for h in hist_6m if safe_float(h.get("close")) > 0]
+            ma50 = None
+            ma200 = None
+            trend_score = 50.0
+            if len(closes_6m) >= 50:
+                ma50 = float(sum(closes_6m[-50:]) / 50.0)
+            if len(closes_6m) >= 200:
+                ma200 = float(sum(closes_6m[-200:]) / 200.0)
+            elif len(closes_6m) >= 100:
+                ma200 = float(sum(closes_6m[-100:]) / 100.0)
+            if ma50 and ma200 and ma200 > 0:
+                trend_score = max(0.0, min(100.0, ((ma50 / ma200) - 0.9) / 0.2 * 100.0))
+
+            ret_score = max(0.0, min(100.0, (ret_3m + 20.0) / 40.0 * 100.0))
+            rs_score = max(0.0, min(100.0, (rel_strength + 15.0) / 30.0 * 100.0))
+            momentum_score = round((ret_score * 0.50) + (rs_score * 0.30) + (trend_score * 0.20), 2)
+            momentum_label = _momentum_label(momentum_score)
+
+            price = safe_float(data_3m.get("price") or last)
+            profile = stock_profile_endpoint(sym)
+            name = str(profile.get("name") or sym)
+            industry = str(profile.get("industry") or sector)
             reason = (
-                "strong relative momentum and supportive sentiment"
-                if ret_1m >= 4 and sentiment_avg >= 0
-                else "stable momentum with manageable volatility"
-                if ret_1m >= 0
-                else "higher-beta setup with rebound potential"
+                "3M return and relative strength are leading peers, with MA trend supportive."
+                if momentum_label == "Strong"
+                else "Momentum is positive but mixed versus peers."
+                if momentum_label == "Moderate"
+                else "Momentum is lagging peers; trend needs confirmation."
             )
             ranked.append({
                 "symbol": sym,
-                "return_1m_pct": ret_1m,
-                "sentiment": sentiment_avg,
+                "name": name,
+                "price": round(price, 2) if price > 0 else None,
+                "change": round(safe_float(data_3m.get("change")), 2),
+                "return_3m_pct": round(ret_3m, 2),
+                "relative_strength_vs_spy": round(rel_strength, 2),
+                "ma_trend": "Bullish" if ma50 and ma200 and ma50 >= ma200 else "Mixed/Weak",
+                "momentum_score": momentum_score,
+                "momentum": momentum_label,
+                "sector": sector,
+                "industry": industry,
                 "reason": reason,
             })
         except Exception:
             missing += 1
 
-    ranked.sort(key=lambda x: (safe_float(x.get("return_1m_pct")), safe_float(x.get("sentiment"))), reverse=True)
+    ranked.sort(key=lambda x: safe_float(x.get("momentum_score")), reverse=True)
     top = ranked[:5]
     complete = len(top) >= 3
     return {
@@ -2364,8 +2873,8 @@ def _compute_sector_momentum() -> Dict[str, Any]:
         "Finance": ["JPM", "BAC", "GS"],
         "Energy": ["XOM", "CVX", "COP"],
     }
-    best_name = "Technology"
-    best_score = -999.0
+    best_name: Optional[str] = None
+    best_score: Optional[float] = None
     details: Dict[str, float] = {}
     for name, symbols in sectors.items():
         scores = []
@@ -2383,9 +2892,11 @@ def _compute_sector_momentum() -> Dict[str, Any]:
         if scores:
             avg = float(sum(scores) / len(scores))
             details[name] = round(avg, 2)
-            if avg > best_score:
+            if best_score is None or avg > best_score:
                 best_score = avg
                 best_name = name
+    if best_name is None or best_score is None:
+        return {"sector": None, "momentum": "Unavailable", "score": None, "all": details}
     momentum_label = "Strong" if best_score > 2.0 else ("Moderate" if best_score > 0.5 else "Weak")
     return {"sector": best_name, "momentum": momentum_label, "score": round(best_score, 2), "all": details}
 
@@ -2427,18 +2938,21 @@ def _rank_sector_etfs() -> Dict[str, Any]:
         "Financials": "XLF",
     }
     market_symbol = "SPY"
-    market_ret = 0.0
+    market_ret: Optional[float] = None
     try:
         m = get_stock_data(market_symbol, "3m")
         mh = m.get("history", [])
         if len(mh) >= 2:
-            market_ret = ((safe_float(mh[-1].get("close")) - safe_float(mh[0].get("close"))) / max(1e-9, safe_float(mh[0].get("close")))) * 100.0
+            first_m = safe_float(mh[0].get("close"))
+            last_m = safe_float(mh[-1].get("close"))
+            if first_m > 0:
+                market_ret = ((last_m - first_m) / first_m) * 100.0
     except Exception:
-        market_ret = 0.0
+        market_ret = None
 
     ranked = []
     for sector, etf in etfs.items():
-        ret_3m = 0.0
+        ret_3m: Optional[float] = None
         try:
             s = get_stock_data(etf, "3m")
             hist = s.get("history", [])
@@ -2448,28 +2962,35 @@ def _rank_sector_etfs() -> Dict[str, Any]:
                 if first > 0:
                     ret_3m = ((last - first) / first) * 100.0
         except Exception:
-            ret_3m = 0.0
-
-        rel_strength = ret_3m - market_ret
+            ret_3m = None
+        if ret_3m is None:
+            continue
+        rel_strength = (ret_3m - market_ret) if market_ret is not None else None
         sent = _safe_news_sentiment_for_symbol(etf, days_back=14)
         sent_score = max(0.0, min(100.0, (sent + 1.0) * 50.0))
         ret_score = max(0.0, min(100.0, (ret_3m + 12.0) / 24.0 * 100.0))
-        rs_score = max(0.0, min(100.0, (rel_strength + 10.0) / 20.0 * 100.0))
+        rs_score = (
+            max(0.0, min(100.0, ((rel_strength or 0.0) + 10.0) / 20.0 * 100.0))
+            if rel_strength is not None
+            else 50.0
+        )
         momentum_score = round((ret_score * 0.50) + (rs_score * 0.30) + (sent_score * 0.20), 2)
         ranked.append({
             "sector": sector,
             "etf": etf,
             "return_3m_pct": round(ret_3m, 2),
-            "relative_strength_pct": round(rel_strength, 2),
+            "relative_strength_pct": round(rel_strength, 2) if rel_strength is not None else None,
             "news_sentiment": round(sent, 3),
             "momentum_score": momentum_score,
         })
 
     ranked.sort(key=lambda x: x["momentum_score"], reverse=True)
-    top = ranked[0] if ranked else {"sector": "Technology", "momentum_score": 50.0}
-    momentum_label = "Strong" if top.get("momentum_score", 0) >= 70 else ("Moderate" if top.get("momentum_score", 0) >= 50 else "Weak")
+    top = ranked[0] if ranked else {}
+    momentum_label = "Unavailable"
+    if ranked:
+        momentum_label = "Strong" if safe_float(top.get("momentum_score")) >= 70 else ("Moderate" if safe_float(top.get("momentum_score")) >= 50 else "Weak")
     return {
-        "top_sector": top.get("sector", "Technology"),
+        "top_sector": top.get("sector") if top else None,
         "top_momentum_label": momentum_label,
         "rankings": ranked,
     }
@@ -2553,25 +3074,30 @@ def _build_structured_answer_sections(
 
 
 def _build_market_snapshot(context: AIAdvisorContext) -> Dict[str, Any]:
-    market_score = 50.0
-    market_label = "Neutral"
-    market_meta: Dict[str, Any] = {"score": market_score, "sentiment": market_label}
+    market_score: Optional[float] = None
+    market_label = "Unknown"
+    market_meta: Dict[str, Any] = {"score": None, "sentiment": market_label}
     try:
         if HAS_MARKET_SENTIMENT:
             sent = compute_market_sentiment(force_refresh=False)
             if isinstance(sent, dict):
                 market_meta = sent
-                market_score = float(sent.get("score", market_score))
-                market_label = str(sent.get("sentiment", _sentiment_label(market_score)))
+                raw_score = sent.get("score")
+                market_score = float(raw_score) if raw_score is not None else None
+                market_label = str(sent.get("sentiment", _sentiment_label(market_score))) if market_score is not None else str(sent.get("sentiment", "Unknown"))
     except Exception:
-        market_score = float(context.sentiment or 50.0)
-        market_label = _sentiment_label(market_score)
-        market_meta = {"score": market_score, "sentiment": market_label}
+        if context.sentiment is not None:
+            market_score = float(context.sentiment)
+            market_label = _sentiment_label(market_score)
+            market_meta = {"score": market_score, "sentiment": market_label, "source": "Context"}
 
     sector_momentum = _compute_sector_momentum()
-    risk_outlook = "High" if market_score < 30 else ("Medium" if market_score < 70 else "Low")
+    if market_score is None:
+        risk_outlook = "Unknown"
+    else:
+        risk_outlook = "High" if market_score < 30 else ("Medium" if market_score < 70 else "Low")
     return {
-        "market_score": round(market_score, 1),
+        "market_score": round(market_score, 1) if market_score is not None else None,
         "market_label": market_label,
         "market_meta": market_meta,
         "sector_momentum": sector_momentum,
@@ -2616,10 +3142,24 @@ def _analyze_stock_pipeline(symbol: str, window_days: int = 14) -> Dict[str, Any
     momentum_score = safe_float(signals.get("momentum_score"))
     momentum_label = "Strong" if momentum_score >= 70 else ("Moderate" if momentum_score >= 50 else "Weak")
     confidence_pct = int(round(safe_float(reco.get("confidence")) * 100))
+    profile = {}
+    try:
+        profile = stock_profile_endpoint(sym)
+    except Exception:
+        profile = {}
+    company_name = str(profile.get("name") or reco.get("company_name") or sym)
+    sector = str(profile.get("industry") or _sector_for_symbol(sym))
+    industry = str(profile.get("industry") or sector)
+    analyst_target = safe_float((reco.get("target_price_mean") or 0))
+    price_change = safe_float((reco.get("price_change") or 0))
 
     analysis = {
         "ticker": sym,
+        "company_name": company_name,
+        "sector": sector,
+        "industry": industry,
         "current_price": round(current_price, 2),
+        "price_change": round(price_change, 2),
         "recommendation": str(reco.get("recommendation", "Hold")),
         "confidence": confidence_pct,
         "risk_level": str(reco.get("risk_level", "Medium")),
@@ -2627,6 +3167,7 @@ def _analyze_stock_pipeline(symbol: str, window_days: int = 14) -> Dict[str, Any
         "news_sentiment": str(signals.get("news_sentiment_label", "Neutral")),
         "momentum": momentum_label,
         "forecast_horizon": forecast_horizons,
+        "analyst_target": round(analyst_target, 2) if analyst_target > 0 else None,
         "indicators": {
             "rsi": safe_float(technical.get("rsi")),
             "macd": safe_float(technical.get("macd")),
@@ -2726,28 +3267,40 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
     base_intent = _classify_intent(question)
     ticker_candidates = _extract_ticker_candidates(question)
     intent = _resolve_intent_with_context(base_intent, question, payload.context, ticker_candidates)
+    intent_category = _classify_intent_category(question, intent)
     symbol = _parse_symbol_from_question(question, payload.context)
     explicit_candidates = ticker_candidates
-    explicit_symbol = next(
-        (c for c in explicit_candidates if c in TICKERS or c in (payload.context.watchlist or [])),
-        None
-    )
+    explicit_symbol = normalize_symbol(explicit_candidates[0]) if explicit_candidates else None
     market = _build_market_snapshot(payload.context)
+    analysis_type = "stock_analysis"
 
     is_sector_stock_picker = intent == "sector_stock_picker"
     is_sector_explanation = intent == "sector_explanation"
+    analysis_engine = _select_analysis_engine(
+        question=question,
+        intent=intent,
+        intent_category=intent_category,
+        explicit_symbol=explicit_symbol,
+        context=payload.context,
+    )
+    is_sector_risk = analysis_engine == "sector_risk_engine"
+    is_stock_risk = analysis_engine == "stock_risk_engine"
+    is_market_risk = analysis_engine == "market_risk_engine"
     is_sector_query = intent == "sector_analysis" or is_sector_explanation or any(k in question.lower() for k in ["sector", "sectors", "industry", "industries"])
     is_market_query = intent in {"market_overview", "risk_explanation", "news_summary"} and explicit_symbol is None
     is_portfolio_query = intent == "portfolio_advice"
     is_comparison_query = intent == "stock_comparison"
 
-    if intent in {"risk_explanation", "news_summary"} and explicit_symbol:
+    if intent in {"news_summary"} and explicit_symbol:
         intent = "single_stock_analysis"
         is_market_query = False
 
     if intent == "unclear_query":
         return {
             "intent": "unclear_query",
+            "intent_category": intent_category,
+            "analysis_type": "clarification",
+            "analysis_engine": analysis_engine,
             "answer": "Do you want a quick stock view, a stock comparison, or a market-wide summary?",
             "answer_schema": {
                 "intent": "unclear_query",
@@ -2778,10 +3331,14 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
         }
 
     if is_comparison_query:
+        analysis_type = "stock_comparison"
         comp_symbols = _extract_comparison_symbols(question, payload.context)
         if len(comp_symbols) < 2:
             return {
                 "intent": "stock_comparison",
+                "intent_category": intent_category,
+                "analysis_type": analysis_type,
+                "analysis_engine": analysis_engine,
                 "answer": "I need two valid symbols to compare. Example: Compare NVDA vs AMD.",
                 "confidence": 45,
                 "sources": ["Internal Intent Router"],
@@ -2803,6 +3360,9 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
         if not left_result.get("ok") or not right_result.get("ok"):
             return {
                 "intent": "stock_comparison",
+                "intent_category": intent_category,
+                "analysis_type": analysis_type,
+                "analysis_engine": analysis_engine,
                 "answer": "I don’t have enough confirmed data for one of these symbols right now.",
                 "confidence": 40,
                 "sources": ["Finnhub", "Market News", "Yahoo Finance"],
@@ -2848,6 +3408,9 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
         )
         return {
             "intent": "stock_comparison",
+            "intent_category": intent_category,
+            "analysis_type": analysis_type,
+            "analysis_engine": analysis_engine,
             "answer": answer,
             "answer_schema": schema,
             "confidence": int(schema.get("confidence", 70)),
@@ -2871,38 +3434,188 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
             },
         }
 
-    if is_sector_stock_picker:
+    if is_stock_risk:
+        analysis_type = "stock_risk"
+        risk_symbol = explicit_symbol or symbol or str(payload.context.selected_stock or "").upper().strip()
+        if not risk_symbol:
+            if payload.context.watchlist:
+                risk_symbol = str(payload.context.watchlist[0]).upper().strip()
+            elif payload.context.recent_searches:
+                risk_symbol = str(payload.context.recent_searches[0]).upper().strip()
+            else:
+                return {
+                    "intent": "risk_explanation",
+                    "intent_category": intent_category,
+                    "analysis_type": analysis_type,
+                    "analysis_engine": analysis_engine,
+                    "answer": "I need a stock symbol for downside risk analysis. Example: What are NVDA downside risks?",
+                    "confidence": 45,
+                    "sources": ["Internal Intent Router"],
+                    "followups": ["What are NVDA downside risks?", "What are AAPL downside risks?"],
+                }
+        stock_result = _analyze_stock_pipeline(risk_symbol, window_days=14)
+        if not stock_result.get("ok"):
+            return {
+                "intent": "risk_explanation",
+                "intent_category": intent_category,
+                "analysis_type": analysis_type,
+                "analysis_engine": analysis_engine,
+                "answer": stock_result.get("message", "I cannot confirm this analysis due to missing market data."),
+                "confidence": 40,
+                "sources": stock_result.get("sources", []),
+                "followups": _build_followup_prompts("sector_risk", risk_symbol, _sector_for_symbol(risk_symbol)),
+            }
+        risk_result = _build_stock_risk_response(risk_symbol, stock_result, market)
+        return {
+            "intent": "risk_explanation",
+            "intent_category": intent_category,
+            "analysis_type": analysis_type,
+            "analysis_engine": analysis_engine,
+            "answer": risk_result["answer"],
+            "answer_schema": risk_result["schema"],
+            "confidence": risk_result["schema"].get("confidence", 74),
+            "sources": risk_result["schema"].get("sources", []),
+            "followups": risk_result["followups"],
+            "status": {
+                "online": True,
+                "message": "Connected",
+                "live_data_ready": True,
+                "market_context_loaded": True,
+            },
+            "analysis": {
+                "type": "stock_risk",
+                "ticker": risk_symbol,
+            },
+            "summary": {
+                "market_sentiment": market.get("market_label", "Neutral"),
+                "fear_greed_score": market.get("market_score", 50),
+                "trending_sector": _sector_for_symbol(risk_symbol),
+                "risk_outlook": market.get("risk_outlook", "Medium"),
+            },
+            "charts": stock_result.get("charts", {}),
+        }
+
+    if is_market_risk:
+        analysis_type = "market_risk"
+        risk_result = _build_market_risk_response(market)
+        return {
+            "intent": "risk_explanation",
+            "intent_category": intent_category,
+            "analysis_type": analysis_type,
+            "analysis_engine": analysis_engine,
+            "answer": risk_result["answer"],
+            "answer_schema": risk_result["schema"],
+            "confidence": risk_result["schema"].get("confidence", 70),
+            "sources": risk_result["schema"].get("sources", []),
+            "followups": risk_result["followups"],
+            "status": {
+                "online": True,
+                "message": "Connected",
+                "live_data_ready": True,
+                "market_context_loaded": True,
+            },
+            "analysis": {
+                "type": "market_risk",
+            },
+            "summary": {
+                "market_sentiment": market.get("market_label", "Neutral"),
+                "fear_greed_score": market.get("market_score", 50),
+                "trending_sector": (market.get("sector_momentum") or {}).get("sector", "Technology"),
+                "risk_outlook": market.get("risk_outlook", "Medium"),
+            },
+        }
+
+    if is_sector_risk:
+        analysis_type = "sector_risk"
         sector_rank = _rank_sector_etfs()
         rankings = sector_rank.get("rankings", [])
         resolved_sector = _resolve_sector_context(question, payload.context, rankings)
+        top_match = next((x for x in rankings if str(x.get("sector", "")).lower() == resolved_sector.lower()), {}) if rankings else {}
+        risk_result = _build_sector_risk_response(question, resolved_sector, market, top_match)
+        return {
+            "intent": "risk_explanation",
+            "intent_category": intent_category,
+            "analysis_type": analysis_type,
+            "analysis_engine": analysis_engine,
+            "answer": risk_result["answer"],
+            "answer_schema": risk_result["schema"],
+            "confidence": risk_result["schema"].get("confidence", 74),
+            "sources": risk_result["schema"].get("sources", []),
+            "followups": risk_result["followups"],
+            "status": {
+                "online": True,
+                "message": "Connected",
+                "live_data_ready": True,
+                "market_context_loaded": True,
+            },
+            "analysis": {
+                "type": "sector_risk",
+                "sector": resolved_sector,
+            },
+            "summary": {
+                "market_sentiment": market.get("market_label", "Neutral"),
+                "fear_greed_score": market.get("market_score", 50),
+                "trending_sector": resolved_sector,
+                "risk_outlook": market.get("risk_outlook", "Medium"),
+            },
+        }
+
+    if is_sector_stock_picker:
+        analysis_type = "sector_stock_picker"
+        sector_rank = _rank_sector_etfs()
+        rankings = sector_rank.get("rankings", [])
+        resolved_sector = _resolve_sector_context(question, payload.context, rankings)
+        etf_symbol = SECTOR_ETF_MAP.get(resolved_sector, "XLK")
+        sector_snapshot = next((x for x in rankings if str(x.get("sector", "")).lower() == resolved_sector.lower()), {}) if rankings else {}
         stock_rank = _rank_sector_stock_momentum(resolved_sector)
         top_stocks = stock_rank.get("stocks", [])[:5]
-        market_label = str(market.get("market_label", "Neutral"))
+        market_label = str(market.get("market_label", "Unknown"))
+        market_score_raw = market.get("market_score")
+        market_score = float(market_score_raw) if market_score_raw is not None else None
         weak_regime = market_label in {"Fear", "Extreme Fear"}
 
         if len(top_stocks) < 3:
-            fallback_symbols = SECTOR_STOCK_UNIVERSE.get(resolved_sector, [])[:5]
-            watchlist = [{"symbol": s, "reason": "best-effort watchlist while stock-level ranking data is incomplete"} for s in fallback_symbols]
             direct = f"I do not have enough confirmed stock-level ranking data for {resolved_sector} right now."
-            why = watchlist[:5]
+            display_rows = top_stocks
             confidence = 52
         else:
-            direct = f"Top momentum stocks in {resolved_sector} right now are: {', '.join([x['symbol'] for x in top_stocks[:5]])}."
-            why = [{"symbol": s["symbol"], "reason": s["reason"]} for s in top_stocks]
+            direct = f"Top momentum stocks in {resolved_sector}: {', '.join([x['symbol'] for x in top_stocks])}."
+            display_rows = top_stocks
             confidence = 74
 
-        top_list = [w["symbol"] for w in why][:5]
-        why_lines = [f"- {w['symbol']}: {w['reason']}" for w in why[:5]]
+        top_list = [w.get("symbol") for w in display_rows if w.get("symbol")][:5]
+        why_lines = [
+            f"{i+1}. {row.get('name') or row.get('symbol')} ({row.get('symbol')}) | "
+            f"Price " + (f"${safe_float(row.get('price')):.2f}" if row.get("price") is not None else "N/A") + " | "
+            f"3M Return " + (f"{safe_float(row.get('return_3m_pct')):+.2f}%" if row.get("return_3m_pct") is not None else "N/A") + " | "
+            f"Momentum {row.get('momentum', 'N/A')}"
+            for i, row in enumerate(display_rows[:5])
+        ]
         risk_note = (
             f"Risk note: market regime is {market_label}, so higher-beta names in {resolved_sector} can stay volatile."
             if weak_regime else
             f"Risk note: watch for sector rotation and earnings-event volatility in {resolved_sector} names."
         )
+        momentum_snapshot = sector_snapshot.get("momentum_score")
+        momentum_context = (
+            "improving" if momentum_snapshot is not None and safe_float(momentum_snapshot) >= 55 else "mixed"
+        )
+        fg_part = (
+            f"Fear & Greed Index: {market_score:.0f} ({market_label})."
+            if market_score is not None
+            else "Fear & Greed Index: N/A."
+        )
+        sector_context = (
+            f"{resolved_sector} sector momentum is {momentum_context} "
+            f"based on available 3M trend and relative-strength signals. {fg_part}"
+        )
         followups = _build_followup_prompts("sector_stock_picker", top_list[0] if top_list else "", resolved_sector)
         answer = (
             f"Direct answer: {direct}\n\n"
-            f"Top stocks list ({resolved_sector}): {', '.join(top_list) if top_list else 'N/A'}\n\n"
-            f"Why these names:\n" + ("\n".join(why_lines) if why_lines else "- No confirmed stock-level ranking data available.") + "\n\n"
+            f"Sector overview: {resolved_sector} ({etf_symbol})\n"
+            f"Top Stocks: {' • '.join(top_list) if top_list else 'N/A'}\n\n"
+            f"Top momentum stocks:\n" + ("\n".join(why_lines) if why_lines else "- No confirmed stock-level ranking data available.") + "\n\n"
+            f"Sector context: {sector_context}\n\n"
             f"{risk_note}\n\n"
             f"Suggested follow-ups: {' / '.join(followups)}"
         )
@@ -2910,10 +3623,20 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
             "intent": "sector_stock_picker",
             "answer_title": f"{resolved_sector} Top Momentum Stocks",
             "direct_answer": direct,
-            "summary_points": why_lines,
+            "summary_points": [f"- {line}" for line in why_lines],
+            "sector_overview": {
+                "sector": resolved_sector,
+                "etf": etf_symbol,
+                "top_stocks_inline": top_list,
+                "fear_greed_index": round(market_score, 1) if market_score is not None else None,
+                "market_regime": market_label,
+                "sector_momentum_score": round(safe_float(momentum_snapshot), 2) if momentum_snapshot is not None else None,
+                "context": sector_context,
+            },
             "sector_stock_picker": {
                 "sector": resolved_sector,
-                "stocks": top_stocks if top_stocks else [{"symbol": w["symbol"], "reason": w["reason"]} for w in why],
+                "etf": etf_symbol,
+                "stocks": display_rows if display_rows else [],
             },
             "risks": [risk_note.replace("Risk note: ", "")],
             "confidence": confidence,
@@ -2926,6 +3649,9 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
         }
         return {
             "intent": "sector_stock_picker",
+            "intent_category": intent_category,
+            "analysis_type": analysis_type,
+            "analysis_engine": analysis_engine,
             "answer": answer,
             "answer_schema": answer_schema,
             "confidence": confidence,
@@ -2944,25 +3670,58 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
             },
             "summary": {
                 "market_sentiment": market_label,
-                "fear_greed_score": market.get("market_score", 50),
+                "fear_greed_score": market.get("market_score"),
                 "trending_sector": resolved_sector,
             },
         }
 
     if is_sector_query or is_market_query:
+        analysis_type = "sector_or_market"
         sector_rank = _rank_sector_etfs()
         rankings = sector_rank.get("rankings", [])
-        top = rankings[0] if rankings else {
-            "sector": "Technology", "etf": "XLK", "return_3m_pct": 0.0, "relative_strength_pct": 0.0, "news_sentiment": 0.0, "momentum_score": 50.0
-        }
-        top_sector = str(top.get("sector", "Technology"))
-        top_etf = str(top.get("etf", "XLK"))
-        score = safe_float(top.get("momentum_score"))
-        signal = f"Overweight {top_sector}" if score >= 70 else (f"Selective exposure to {top_sector}" if score >= 50 else "Defensive sector allocation")
-        confidence = int(max(45, min(92, round(50 + score * 0.35))))
+        if not rankings:
+            return {
+                "intent": "sector_analysis" if is_sector_query else "market_overview",
+                "intent_category": intent_category,
+                "analysis_type": analysis_type,
+                "analysis_engine": analysis_engine,
+                "answer": "I cannot confirm sector momentum ranking right now because live sector data is unavailable.",
+                "confidence": 35,
+                "data_validation": {"price_data": False, "news_data": False, "technical_data": False},
+                "sources": ["Finnhub", "Market News", "Internal Technical Model"],
+                "followups": [
+                    "Try again in a few minutes",
+                    "Ask for single-stock analysis instead",
+                ],
+                "status": {
+                    "online": True,
+                    "message": "Connected",
+                    "live_data_ready": False,
+                    "market_context_loaded": True,
+                },
+            }
+
+        top = rankings[0]
+        top_sector = str(top.get("sector", "Unknown"))
+        top_etf = str(top.get("etf", "SPY"))
+        score_raw = top.get("momentum_score")
+        score = safe_float(score_raw) if score_raw is not None else None
+        top_news_sentiment = safe_float(top.get("news_sentiment"))
+        top_news_label = "Bullish" if top_news_sentiment > 0.15 else ("Bearish" if top_news_sentiment < -0.15 else "Neutral")
+        signal = (
+            f"Overweight {top_sector}" if score is not None and score >= 70
+            else (f"Selective exposure to {top_sector}" if score is not None and score >= 50 else "Defensive sector allocation")
+        )
+        confidence = int(max(45, min(92, round(50 + (score * 0.35 if score is not None else 12)))))
+        fg_score = market.get("market_score")
+        fg_line = (
+            f"Fear & Greed: {fg_score} ({market['market_label']})"
+            if fg_score is not None
+            else f"Fear & Greed: N/A ({market['market_label']})"
+        )
         sections = {
             "market_summary": [
-                f"Fear & Greed: {market['market_score']} ({market['market_label']})",
+                fg_line,
                 f"Strongest sector now: {top_sector} ({top_etf})",
                 "Sector ranking (3M momentum): " + " | ".join(
                     [f"{r['sector']} {safe_float(r['momentum_score']):.1f}" for r in rankings[:3]]
@@ -2970,8 +3729,12 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
             ],
             "technical_signals": [
                 f"{top_etf} 3M return: {safe_float(top.get('return_3m_pct')):+.2f}%",
-                f"Relative strength vs SPY: {safe_float(top.get('relative_strength_pct')):+.2f}%",
-                f"Sector momentum score: {score:.1f}/100",
+                (
+                    f"Relative strength vs SPY: {safe_float(top.get('relative_strength_pct')):+.2f}%"
+                    if top.get("relative_strength_pct") is not None
+                    else "Relative strength vs SPY: N/A"
+                ),
+                (f"Sector momentum score: {score:.1f}/100" if score is not None else "Sector momentum score: N/A"),
             ],
             "news_sentiment": [
                 f"{top_sector} news sentiment score: {safe_float(top.get('news_sentiment')):+.3f}",
@@ -2985,17 +3748,30 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
             "ai_recommendation": {
                 "signal": signal,
                 "reason": "Based on 3M return, relative strength, and news sentiment.",
-                "forecast_horizon": {"7d": 0, "30d": 0, "90d": 0},
+                "forecast_horizon": {},
             },
             "confidence_score": confidence,
             "sources": ["Finnhub", "Market News", "Yahoo Finance", "Internal Technical Model"],
             "sector_rankings": rankings,
         }
+        ret3m_txt = (
+            f"{safe_float(top.get('return_3m_pct')):+.2f}%"
+            if top.get("return_3m_pct") is not None
+            else "N/A"
+        )
+        rs_txt = (
+            f"{safe_float(top.get('relative_strength_pct')):+.2f}%"
+            if top.get("relative_strength_pct") is not None
+            else "N/A"
+        )
+        score_txt = f"{score:.1f}/100" if score is not None else "N/A"
+        fg_txt = f"{fg_score} ({market['market_label']})" if fg_score is not None else f"N/A ({market['market_label']})"
         fallback_text = (
-            f"ตอนนี้กลุ่มที่โมเมนตัมดีที่สุดคือ {top_sector} ({top_etf}) โดยคะแนนโมเมนตัม {score:.1f}/100 "
-            f"จากผลตอบแทน 3 เดือน {safe_float(top.get('return_3m_pct')):+.2f}% และ Relative Strength เทียบ SPY "
-            f"{safe_float(top.get('relative_strength_pct')):+.2f}%. ภาพรวมตลาดอยู่ที่ Fear & Greed {market['market_score']} "
-            f"({market['market_label']}) ดังนั้นคำแนะนำเชิงกลยุทธ์คือ {signal} พร้อมติดตามการหมุน sector อย่างใกล้ชิด."
+            f"ตอนนี้กลุ่มที่เด่นที่สุดจากข้อมูลที่มีคือ {top_sector} ({top_etf}) "
+            f"โดย 3M return = {ret3m_txt}, Relative Strength vs SPY = {rs_txt}, "
+            f"และ sector momentum score = {score_txt}. "
+            f"ภาพรวมตลาด Fear & Greed = {fg_txt}. "
+            f"ดังนั้นมุมมองเชิงกลยุทธ์ตอนนี้คือ {signal} พร้อมติดตามการหมุน sector อย่างใกล้ชิด."
         )
         answer = _generate_grounded_response(
             question=question,
@@ -3018,9 +3794,9 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
                 "confidence": confidence,
                 "technical_trend": "Momentum-driven",
                 "momentum": sector_rank.get("top_momentum_label", "Moderate"),
-                "news_sentiment": "Mixed",
+                "news_sentiment": top_news_label,
                 "risks": sections.get("risk_factors", []),
-                "forecast_horizon": {"7d": 0, "30d": 0, "90d": 0},
+                "forecast_horizon": {},
             },
             market=market,
             sources=sections["sources"],
@@ -3033,19 +3809,22 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
         )
         return {
             "intent": "sector_explanation" if is_sector_explanation else ("sector_analysis" if is_sector_query else "market_overview"),
+            "intent_category": intent_category,
+            "analysis_type": analysis_type,
+            "analysis_engine": analysis_engine,
             "answer": answer,
             "confidence": confidence,
             "data_validation": {"price_data": True, "news_data": True, "technical_data": True},
             "analysis": {
                 "type": "sector_explanation" if is_sector_explanation else ("sector_analysis" if is_sector_query else "market_overview"),
                 "ticker": top_etf,
-                "current_price": 0,
+                "current_price": None,
                 "recommendation": signal,
                 "risk_level": market["risk_outlook"],
                 "technical_trend": "Momentum-driven",
-                "news_sentiment": "Mixed",
+                "news_sentiment": top_news_label,
                 "momentum": sector_rank.get("top_momentum_label", "Moderate"),
-                "forecast_horizon": {"7d": 0, "30d": 0, "90d": 0},
+                "forecast_horizon": {},
                 "sector_rankings": rankings,
             },
             "sections": {},
@@ -3059,7 +3838,7 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
                 "sector_momentum": sector_rank.get("top_momentum_label", "Moderate"),
                 "risk_outlook": market["risk_outlook"],
                 "signal": signal,
-                "forecast_horizon": {"7d": 0, "30d": 0, "90d": 0},
+                "forecast_horizon": {},
                 "market_momentum": safe_float(top.get("momentum_score")),
                 "sector_performance": {r["sector"]: safe_float(r["momentum_score"]) for r in rankings},
                 "explanation": "Sector ranking is computed from 3M return, relative strength vs SPY, and aggregated news sentiment.",
@@ -3085,7 +3864,23 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
         if not symbols:
             symbols = [str(x).upper() for x in (payload.context.watchlist or [])][:8]
         if not symbols:
-            symbols = ["NVDA", "MSFT", "AAPL"]
+            return {
+                "intent": "portfolio_advice",
+                "answer": "I cannot analyze portfolio risk because no user portfolio positions were provided.",
+                "confidence": 30,
+                "data_validation": {"price_data": False, "news_data": False, "technical_data": False},
+                "sources": ["Finnhub", "Internal Portfolio Model"],
+                "followups": [
+                    "Add portfolio positions first",
+                    "Ask for market overview instead",
+                ],
+                "status": {
+                    "online": True,
+                    "message": "Connected",
+                    "live_data_ready": False,
+                    "market_context_loaded": True,
+                },
+            }
 
         sector_counts: Dict[str, int] = {}
         for sym in symbols:
@@ -3147,20 +3942,20 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
         answer_schema = _build_answer_schema(
             intent="portfolio_advice",
             analysis={
-                "ticker": symbols[0] if symbols else "NVDA",
+                "ticker": symbols[0],
                 "recommendation": sections["ai_recommendation"]["signal"],
                 "confidence": confidence,
                 "technical_trend": market["market_label"],
                 "momentum": market["sector_momentum"].get("momentum", "Moderate"),
                 "news_sentiment": "Market-driven",
                 "risks": sections.get("risk_factors", []),
-                "forecast_horizon": {"7d": 0, "30d": 0, "90d": 0},
+                "forecast_horizon": {},
             },
             market=market,
             sources=sections["sources"],
             signal=sections["ai_recommendation"]["signal"],
         )
-        followups = _build_followup_prompts("portfolio_advice", symbols[0] if symbols else "NVDA", dominant)
+        followups = _build_followup_prompts("portfolio_advice", symbols[0], dominant)
         return {
             "intent": "portfolio_advice",
             "answer": answer,
@@ -3168,34 +3963,34 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
             "data_validation": {"price_data": True, "news_data": True, "technical_data": True},
             "analysis": {
                 "type": "portfolio_advice",
-                "ticker": symbols[0] if symbols else "NVDA",
-                "current_price": 0,
+                "ticker": symbols[0],
+                "current_price": None,
                 "recommendation": sections["ai_recommendation"]["signal"],
                 "risk_level": risk,
                 "technical_trend": market["market_label"],
                 "news_sentiment": "Market-driven",
                 "momentum": market["sector_momentum"].get("momentum", "Moderate"),
-                "forecast_horizon": {"7d": 0, "30d": 0, "90d": 0},
+                "forecast_horizon": {},
             },
             "sections": {},
             "sources": sections["sources"],
             "summary": {
                 "market_sentiment": market["market_label"],
                 "fear_greed_score": market["market_score"],
-                "top_ai_pick": symbols[0] if symbols else "NVDA",
+                "top_ai_pick": symbols[0],
                 "top_ai_pick_confidence": confidence,
                 "trending_sector": dominant,
                 "sector_momentum": market["sector_momentum"].get("momentum", "Moderate"),
                 "risk_outlook": risk,
                 "signal": sections["ai_recommendation"]["signal"],
-                "forecast_horizon": {"7d": 0, "30d": 0, "90d": 0},
+                "forecast_horizon": {},
                 "market_momentum": market["sector_momentum"].get("score", 0.0),
                 "sector_performance": market["sector_momentum"].get("all", {}),
                 "explanation": "Portfolio risk is assessed from concentration and current market regime.",
             },
             "charts": {
-                "price": _build_price_chart(symbols[0] if symbols else "NVDA"),
-                "sentiment": _build_sentiment_chart(symbols[0] if symbols else "NVDA"),
+                "price": _build_price_chart(symbols[0]),
+                "sentiment": _build_sentiment_chart(symbols[0]),
             },
             "answer_schema": answer_schema,
             "followups": followups,
@@ -3211,11 +4006,11 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
     if intent in {"market_overview", "news_summary", "risk_explanation", "sector_explanation"}:
         sector_rank = _rank_sector_etfs()
         rankings = sector_rank.get("rankings", [])
-        top = rankings[0] if rankings else {"sector": "Technology", "etf": "XLK", "momentum_score": 50.0}
+        top = rankings[0] if rankings else {}
         confidence = 68
         fallback_text = (
             f"ตอนนี้ภาพรวมตลาดอยู่ที่ Fear & Greed {market['market_score']} ({market['market_label']}) "
-            f"และกลุ่มนำตลาดคือ {top.get('sector')} ({top.get('etf')}) "
+            f"และกลุ่มนำตลาดคือ {top.get('sector', 'N/A')} ({top.get('etf', 'N/A')}) "
             f"ด้วยคะแนนโมเมนตัม {safe_float(top.get('momentum_score')):.1f}/100. "
             "หากต้องการคำแนะนำที่แม่นขึ้น กรุณาระบุชื่อหุ้นหรือพอร์ตที่ต้องการวิเคราะห์."
         )
@@ -3233,19 +4028,19 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
         answer_schema = _build_answer_schema(
             intent=intent,
             analysis={
-                "ticker": str(top.get("etf", "SPY")),
+                "ticker": str(top.get("etf", "N/A")),
                 "recommendation": "Market overview",
                 "confidence": confidence,
                 "technical_trend": "Mixed",
                 "momentum": sector_rank.get("top_momentum_label", "Moderate"),
                 "news_sentiment": market["market_label"],
-                "forecast_horizon": {"7d": 0, "30d": 0, "90d": 0},
+                "forecast_horizon": {},
             },
             market=market,
             sources=["Finnhub", "Market News", "Yahoo Finance", "Internal Technical Model"],
             signal="Market overview",
         )
-        followups = _build_followup_prompts(intent, str(top.get("etf", "SPY")), str(top.get("sector", "Technology")))
+        followups = _build_followup_prompts(intent, str(top.get("etf", "N/A")), str(top.get("sector", "N/A")))
         return {
             "intent": intent,
             "answer": answer,
@@ -3253,7 +4048,7 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
             "data_validation": {"price_data": True, "news_data": True, "technical_data": True},
             "analysis": {
                 "type": intent,
-                "ticker": str(top.get("etf", "SPY")),
+                "ticker": str(top.get("etf", "N/A")),
                 "recommendation": "Market overview",
                 "risk_level": market["risk_outlook"],
             },
@@ -3262,17 +4057,17 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
             "summary": {
                 "market_sentiment": market["market_label"],
                 "fear_greed_score": market["market_score"],
-                "top_ai_pick": str(top.get("etf", "SPY")),
+                "top_ai_pick": str(top.get("etf", "N/A")),
                 "top_ai_pick_confidence": confidence,
-                "trending_sector": str(top.get("sector", "Technology")),
+                "trending_sector": str(top.get("sector", "N/A")),
                 "sector_momentum": sector_rank.get("top_momentum_label", "Moderate"),
                 "risk_outlook": market["risk_outlook"],
                 "signal": "Market overview",
-                "forecast_horizon": {"7d": 0, "30d": 0, "90d": 0},
+                "forecast_horizon": {},
             },
             "charts": {
-                "price": _build_price_chart(str(top.get("etf", "SPY"))),
-                "sentiment": _build_sentiment_chart(str(top.get("etf", "SPY"))),
+                "price": _build_price_chart(str(top.get("etf", "N/A"))),
+                "sentiment": _build_sentiment_chart(str(top.get("etf", "N/A"))),
             },
             "answer_schema": answer_schema,
             "followups": followups,
@@ -3288,16 +4083,47 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
     if explicit_symbol:
         symbol = explicit_symbol
     if not symbol:
-        # กำหนด default เฉพาะกรณีถามเชิงหุ้นจริง ๆ เท่านั้น
-        if intent == "single_stock_analysis":
-            if payload.context.watchlist:
-                symbol = str(payload.context.watchlist[0]).upper()
-            elif payload.context.recent_searches:
-                symbol = str(payload.context.recent_searches[0]).upper()
-            else:
-                symbol = "NVDA"
+        if payload.context.watchlist:
+            symbol = str(payload.context.watchlist[0]).upper()
+        elif payload.context.recent_searches:
+            symbol = str(payload.context.recent_searches[0]).upper()
         else:
-            symbol = "SPY"
+            return {
+                "intent": intent,
+                "answer": "I cannot determine which symbol to analyze. Please provide a stock ticker.",
+                "confidence": 30,
+                "warning": "Missing symbol context.",
+                "data_validation": {"price_data": False, "news_data": False, "technical_data": False},
+                "analysis": {},
+                "sources": [],
+                "summary": {
+                    "market_sentiment": market["market_label"],
+                    "fear_greed_score": market["market_score"],
+                    "top_ai_pick": "N/A",
+                    "top_ai_pick_confidence": 30,
+                    "trending_sector": market["sector_momentum"].get("sector", "N/A"),
+                    "sector_momentum": market["sector_momentum"].get("momentum", "N/A"),
+                    "risk_outlook": market["risk_outlook"],
+                    "forecast_horizon": {},
+                },
+                "answer_schema": {
+                    "summary": "No ticker symbol available in question or context.",
+                    "stance": "Unknown",
+                    "rationale": ["Provide a ticker, e.g. NVDA, AAPL, TSLA."],
+                    "risks": ["No symbol means no stock-level analysis can be validated."],
+                    "actionable_view": "Resubmit your question with a symbol.",
+                    "confidence": 30,
+                    "sources": [],
+                    "data_coverage": {"price_data": False, "news_data": False, "technical_data": False},
+                },
+                "followups": ["Analyze NVDA", "Compare NVDA vs AMD", "Show market overview"],
+                "status": {
+                    "online": True,
+                    "message": "Connected",
+                    "live_data_ready": False,
+                    "market_context_loaded": True,
+                },
+            }
 
     stock_result = _analyze_stock_pipeline(symbol, window_days=14)
     if not stock_result.get("ok"):
@@ -3355,27 +4181,41 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
     )
 
     fallback_text = (
-        f"{analysis.get('ticker')} ตอนนี้ราคา {safe_float(analysis.get('current_price')):.2f} และสัญญาณหลักยังอยู่ฝั่ง "
-        f"{analysis.get('technical_trend')} ขณะที่ news sentiment เป็น {analysis.get('news_sentiment')} "
-        f"และโมเมนตัม {analysis.get('momentum')}. มุมมอง AI ตอนนี้คือ {analysis.get('recommendation')} "
-        f"โดยคาดการณ์ 7/30/90 วันประมาณ {safe_float(forecast_horizons.get('7d')):+.2f}% / "
-        f"{safe_float(forecast_horizons.get('30d')):+.2f}% / {safe_float(forecast_horizons.get('90d')):+.2f}% "
-        f"ภายใต้ market regime {market['market_label']}."
+        f"{analysis.get('company_name')} ({analysis.get('ticker')})\n\n"
+        "Stock Overview\n"
+        f"- Price: ${safe_float(analysis.get('current_price')):.2f}\n"
+        f"- Sector: {analysis.get('sector')}\n"
+        f"- Industry: {analysis.get('industry')}\n\n"
+        "Technical Signals\n"
+        f"- Technical trend: {analysis.get('technical_trend')}\n"
+        f"- Momentum: {analysis.get('momentum')}\n\n"
+        "Market Sentiment\n"
+        f"- News sentiment: {analysis.get('news_sentiment')}\n"
+        f"- Fear & Greed Index: {market['market_score']} ({market['market_label']})\n\n"
+        "Key Risks\n"
+        + "\n".join([f"- {r}" for r in (analysis.get("risks") or [])[:3]])
+        + "\n\nInvestment View\n"
+        f"- Recommendation: {analysis.get('recommendation')}\n"
+        f"- Forecast horizon: 7D {safe_float(forecast_horizons.get('7d')):+.2f}% | "
+        f"30D {safe_float(forecast_horizons.get('30d')):+.2f}% | "
+        f"90D {safe_float(forecast_horizons.get('90d')):+.2f}%"
     )
-    answer = _generate_grounded_response(
-        question=question,
-        intent=intent,
-        evidence={
-            "analysis": analysis,
-            "market": market,
-            "forecast": forecast_horizons,
-            "sources": sources,
-            "summary_sections": sections,
-        },
-        fallback_text=fallback_text,
-    )
-    if confidence < 65 and "not fully confident" not in answer.lower():
-        answer += "\n\nI'm not fully confident in this answer. Please verify with financial sources."
+    if intent == "single_stock_analysis":
+        answer = fallback_text
+    else:
+        answer = _generate_grounded_response(
+            question=question,
+            intent=intent,
+            evidence={
+                "analysis": analysis,
+                "market": market,
+                "forecast": forecast_horizons,
+                "sources": sources,
+                "summary_sections": sections,
+            },
+            fallback_text=fallback_text,
+        )
+    answer = answer.replace("I'm not fully confident", "Based on current technical and sentiment data")
 
     followups = _build_followup_prompts(intent, analysis.get("ticker", symbol), top_sector)
     answer_schema = _build_answer_schema(
@@ -3427,30 +4267,63 @@ def ai_advisor_endpoint(payload: AIAdvisorRequest):
 @app.post("/ai-summary")
 @app.post("/api/ai-summary")
 def ai_summary_endpoint(payload: AISummaryRequest):
-    market = _build_market_snapshot(payload.context)
-    candidates = payload.context.watchlist[:5] if payload.context.watchlist else ["NVDA", "MSFT", "AAPL"]
-    best = {"symbol": "NVDA", "confidence": 0, "score": -1, "analysis": None}
-    for sym in candidates:
-        try:
-            analyzed = _analyze_stock_pipeline(sym, window_days=14)
-            if not analyzed.get("ok"):
-                continue
-            a = analyzed.get("analysis", {})
-            score = safe_float(analyzed.get("raw", {}).get("ai_score"))
-            conf = int(a.get("confidence", 0))
-            if score > best["score"]:
-                best = {"symbol": sym, "confidence": conf, "score": score, "analysis": analyzed}
-        except Exception:
-            continue
+    watchlist = normalize_symbol_list(payload.context.watchlist[:8] if payload.context.watchlist else [])
+    recent = normalize_symbol_list(payload.context.recent_searches[:8] if payload.context.recent_searches else [])
+    cache_key = json.dumps({"watchlist": watchlist, "recent": recent}, sort_keys=True)
+    now_ts = time.time()
 
-    top_symbol = best["symbol"]
+    cached_summary = ai_summary_cache.get(cache_key)
+    if cached_summary and (now_ts - float(cached_summary.get("ts", 0))) < AI_SUMMARY_CACHE_TTL:
+        return cached_summary.get("data")
+
+    market = _build_market_snapshot(payload.context)
+    context_symbols = watchlist[:5]
+    candidates = context_symbols or _default_active_symbols(5)
+    if not candidates:
+        raise HTTPException(status_code=503, detail="No live symbols available for AI summary")
+    best = {"symbol": candidates[0], "confidence": 0, "score": -1, "analysis": None}
+
+    # Fast path: use AI picker ranking first (DB-backed and much faster than per-symbol live pipeline loop).
+    if HAS_AI_PICKER:
+        try:
+            picker_rows = get_ai_picks("BALANCED", 20) or []
+            if context_symbols:
+                picker_rows = [row for row in picker_rows if normalize_symbol(row.get("ticker")) in set(context_symbols)]
+            if picker_rows:
+                top_row = max(picker_rows, key=lambda row: safe_float(row.get("ai_score")))
+                pick_conf = int(round(safe_float(top_row.get("confidence"))))
+                best = {
+                    "symbol": normalize_symbol(top_row.get("ticker")) or candidates[0],
+                    "confidence": max(35, min(95, pick_conf or 70)),
+                    "score": safe_float(top_row.get("ai_score")),
+                    "analysis": None,
+                }
+        except Exception as e:
+            logger.warning(f"ai-summary fast path failed, fallback to stock pipeline: {e}")
+
+    # Fallback path: live pipeline (limited candidates for speed).
+    if best["score"] < 0:
+        for sym in candidates[:3]:
+            try:
+                analyzed = _analyze_stock_pipeline(sym, window_days=14)
+                if not analyzed.get("ok"):
+                    continue
+                a = analyzed.get("analysis", {})
+                score = safe_float(analyzed.get("raw", {}).get("ai_score"))
+                conf = int(a.get("confidence", 0))
+                if score > best["score"]:
+                    best = {"symbol": sym, "confidence": conf, "score": score, "analysis": analyzed}
+            except Exception:
+                continue
+
+    top_symbol = best["symbol"] or candidates[0]
     top_conf = best["confidence"] or 70
     explanation = (
         f"AI analysis indicates that {market['sector_momentum'].get('sector', 'Technology')} stocks "
         f"show {market['sector_momentum'].get('momentum', 'moderate').lower()} relative momentum "
         "supported by recent sentiment and trend signals."
     )
-    return {
+    response_payload = {
         "summary": {
             "market_sentiment": market["market_label"],
             "fear_greed_score": market["market_score"],
@@ -3467,6 +4340,8 @@ def ai_summary_endpoint(payload: AISummaryRequest):
         },
         "sources": ["Finnhub", "Market News", "Yahoo Finance", "Internal Technical Model"],
     }
+    ai_summary_cache[cache_key] = {"ts": now_ts, "data": response_payload}
+    return response_payload
 
 
 @app.get("/ai-analyze-stock")
@@ -3704,30 +4579,534 @@ def stock_endpoint(
     symbol: str,
     range: str = Query("3mo", description="1d | 5d | 1m | 3m | 6m | ytd | 1y | 5y | all")
 ):
+    def _latest_day_range(history_rows: List[Dict[str, Any]]) -> Dict[str, float]:
+        if not history_rows:
+            return {"low": 0.0, "high": 0.0}
+        last_date = str(history_rows[-1].get("date", ""))
+        latest_day = last_date.split(" ")[0]
+        same_day = [r for r in history_rows if str(r.get("date", "")).startswith(latest_day)]
+        target_rows = same_day if same_day else [history_rows[-1]]
+        lows = [safe_float(r.get("low")) for r in target_rows if safe_float(r.get("low")) > 0]
+        highs = [safe_float(r.get("high")) for r in target_rows if safe_float(r.get("high")) > 0]
+        if not lows or not highs:
+            close_value = safe_float(history_rows[-1].get("close"))
+            return {"low": close_value, "high": close_value}
+        return {"low": min(lows), "high": max(highs)}
+
+    def _get_52w_range(sym: str) -> Dict[str, float]:
+        now_ts = time.time()
+        cached = stock_stats_cache.get(sym)
+        if cached and (now_ts - float(cached.get("ts", 0))) < 300:
+            data = cached.get("data", {})
+            return {"low": safe_float(data.get("low")), "high": safe_float(data.get("high"))}
+        try:
+            one_year = get_stock_data(sym, "1y")
+            rows = one_year.get("history", []) or []
+            highs = [safe_float(r.get("high")) for r in rows if safe_float(r.get("high")) > 0]
+            lows = [safe_float(r.get("low")) for r in rows if safe_float(r.get("low")) > 0]
+            if highs and lows:
+                result = {"low": min(lows), "high": max(highs)}
+                stock_stats_cache[sym] = {"ts": now_ts, "data": result}
+                return result
+        except Exception as e:
+            logger.warning(f"52W range fallback failed for {sym}: {e}")
+        return {"low": 0.0, "high": 0.0}
+
+    def _yahoo_aligned_return(sym: str, range_value: str) -> Dict[str, Any]:
+        key = str(range_value or "").strip().lower()
+        cache_key = f"{sym.upper()}:{key}"
+        now_ts = time.time()
+        cached = stock_return_cache.get(cache_key)
+        if cached and (now_ts - float(cached.get("ts", 0))) < 300:
+            return dict(cached.get("data") or {})
+        range_map = {
+            "1d": ("1d", "5m"),
+            "5d": ("5d", "30m"),
+            "1m": ("1mo", "1d"),
+            "1mo": ("1mo", "1d"),
+            "3m": ("3mo", "1d"),
+            "3mo": ("3mo", "1d"),
+            "6m": ("6mo", "1d"),
+            "6mo": ("6mo", "1d"),
+            "ytd": ("ytd", "1d"),
+            "1y": ("1y", "1d"),
+            "5y": ("5y", "1d"),
+            "all": ("max", "1d"),
+            "max": ("max", "1d"),
+        }
+        yf_range, yf_interval = range_map.get(key, ("1mo", "1d"))
+        for yf_symbol in _symbol_variants(sym):
+            try:
+                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_symbol}"
+                resp = requests.get(
+                    url,
+                    params={
+                        "range": yf_range,
+                        "interval": yf_interval,
+                        "includePrePost": "false",
+                        "events": "div,splits",
+                    },
+                    timeout=12,
+                )
+                if resp.status_code != 200:
+                    continue
+                payload = resp.json() if resp.content else {}
+                result = ((payload.get("chart") or {}).get("result") or [])
+                if not result:
+                    continue
+                quote = (((result[0].get("indicators") or {}).get("quote") or [{}])[0] or {})
+                closes = quote.get("close") or []
+                series = [safe_float(x) for x in closes if safe_float(x) > 0]
+                if len(series) < 2:
+                    continue
+                first = safe_float(series[0])
+                last = safe_float(series[-1])
+                if first <= 0 or last <= 0:
+                    continue
+                result = {
+                    "first_close": first,
+                    "last_close": last,
+                    "return_pct": ((last - first) / first) * 100.0,
+                    "source": "YahooChartClose",
+                }
+                stock_return_cache[cache_key] = {"ts": now_ts, "data": result}
+                return result
+            except Exception:
+                continue
+        return {"first_close": 0.0, "last_close": 0.0, "return_pct": 0.0, "source": None}
+
     symbol = symbol.upper()
     stock_data = get_stock_data(symbol, range)
     history = stock_data.get("history", [])
     latest_price = stock_data.get("price", 0.0)
     previous_close = safe_float(stock_data.get("previous_close", 0.0))
+    range_key = str(stock_data.get("range", _normalize_range(range))).lower()
 
-    if previous_close:
-        change_pct = ((latest_price - previous_close) / previous_close * 100) if previous_close else 0.0
-    elif history:
-        latest_price = history[-1].get("close", latest_price)
-        prev_price = history[-2].get("close", latest_price) if len(history) > 1 else latest_price
-        change_pct = ((latest_price - prev_price) / prev_price * 100) if prev_price else 0.0
+    if history:
+        # Keep return calculations close-only so they match finance platforms.
+        latest_close = safe_float(history[-1].get("close")) or safe_float(latest_price)
+        first_close = safe_float(history[0].get("close"))
+        last_close = latest_close
+        reference_close = previous_close if previous_close > 0 else (safe_float(history[-2].get("close")) if len(history) > 1 else 0.0)
     else:
-        change_pct = 0.0
+        latest_close = safe_float(latest_price)
+        first_close = 0.0
+        last_close = latest_close
+        reference_close = previous_close if previous_close > 0 else 0.0
+
+    change_abs = (latest_close - reference_close) if reference_close > 0 else 0.0
+    change_pct = ((change_abs / reference_close) * 100.0) if reference_close > 0 else 0.0
+    range_return_source = "PrimaryCloseSeries"
+    if range_key == "1d":
+        range_return_pct = change_pct
+    else:
+        range_return_pct = ((latest_close - first_close) / first_close * 100.0) if first_close > 0 else 0.0
+
+    # Force Yahoo as single baseline source for first/last close in all ranges for near 1:1 parity.
+    yahoo_ret = _yahoo_aligned_return(symbol, range)
+    if yahoo_ret["first_close"] > 0 and yahoo_ret["last_close"] > 0:
+        first_close = safe_float(yahoo_ret["first_close"])
+        last_close = safe_float(yahoo_ret["last_close"])
+        latest_close = last_close
+        range_return_pct = safe_float(yahoo_ret["return_pct"])
+        range_return_source = str(yahoo_ret.get("source") or "YahooClose")
+
+    day_range = _latest_day_range(history)
+    range_52w = _get_52w_range(symbol)
+    latest_volume = int(history[-1].get("volume") or 0) if history else 0
 
     return {
         "symbol": symbol,
         "name": stock_data.get("name", symbol),
-        "latest_price": round(float(latest_price), 2),
+        "latest_price": round(float(latest_close), 2),
         "previous_close": round(float(previous_close), 2) if previous_close else None,
-        "change": f"{change_pct:+.2f}%",
+        "change": round(float(change_abs), 2),
+        "change_pct": round(float(change_pct), 4),
+        "change_text": f"{change_abs:+.2f} ({change_pct:+.2f}%)",
+        "range_return_pct": round(float(range_return_pct), 4),
+        "range_return_source": range_return_source,
         "history": history,
         "range": stock_data.get("range", _normalize_range(range)),
+        "first_close": round(float(first_close), 4) if first_close > 0 else None,
+        "last_close": round(float(last_close), 4) if last_close > 0 else None,
+        "volume": latest_volume,
+        "day_range_low": round(float(day_range["low"]), 4) if day_range["low"] > 0 else None,
+        "day_range_high": round(float(day_range["high"]), 4) if day_range["high"] > 0 else None,
+        "range_52w_low": round(float(range_52w["low"]), 4) if range_52w["low"] > 0 else None,
+        "range_52w_high": round(float(range_52w["high"]), 4) if range_52w["high"] > 0 else None,
+        "source_provider": stock_data.get("provider"),
     }
+
+
+@app.get("/stock/profile/{symbol}")
+@app.get("/api/stock/profile/{symbol}")
+def stock_profile_endpoint(symbol: str):
+    sym = normalize_symbol(symbol)
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol is required")
+
+    def _domain_from_url(url_value: Any) -> Optional[str]:
+        raw = str(url_value or "").strip()
+        if not raw:
+            return None
+        if not raw.startswith("http://") and not raw.startswith("https://"):
+            raw = f"https://{raw}"
+        try:
+            parsed = urlparse(raw)
+            host = str(parsed.netloc or "").lower().strip()
+            if host.startswith("www."):
+                host = host[4:]
+            return host or None
+        except Exception:
+            return None
+
+    profile = {
+        "name": sym,
+        "ticker": sym,
+        "exchange": None,
+        "industry": None,
+        "logo": None,
+        "weburl": None,
+        "domain": None,
+        "source": "Unknown",
+    }
+
+    try:
+        fh = _finnhub_get("/stock/profile2", {"symbol": sym}) or {}
+        profile.update({
+            "name": fh.get("name") or sym,
+            "ticker": fh.get("ticker") or sym,
+            "exchange": fh.get("exchange"),
+            "industry": fh.get("finnhubIndustry"),
+            "logo": fh.get("logo"),
+            "weburl": fh.get("weburl"),
+            "source": "Finnhub",
+        })
+    except Exception as e:
+        logger.warning(f"Finnhub profile unavailable for {sym}: {e}")
+        try:
+            fmp_rows = _fmp_get(f"/profile/{sym}")
+            row = fmp_rows[0] if isinstance(fmp_rows, list) and fmp_rows else {}
+            profile.update({
+                "name": row.get("companyName") or row.get("name") or sym,
+                "ticker": row.get("symbol") or sym,
+                "exchange": row.get("exchangeShortName") or row.get("exchange"),
+                "industry": row.get("industry") or row.get("sector"),
+                "logo": row.get("image"),
+                "weburl": row.get("website"),
+                "source": "FMP",
+            })
+        except Exception as fmp_error:
+            logger.warning(f"FMP profile unavailable for {sym}: {fmp_error}")
+            try:
+                t = yf.Ticker(sym)
+                info = t.info or {}
+                profile.update({
+                    "name": info.get("longName") or info.get("shortName") or sym,
+                    "ticker": info.get("symbol") or sym,
+                    "exchange": info.get("exchange") or info.get("fullExchangeName"),
+                    "industry": info.get("industry"),
+                    "logo": info.get("logo_url") or info.get("logoUrl"),
+                    "weburl": info.get("website"),
+                    "source": "YahooFallback",
+                })
+            except Exception:
+                pass
+
+    domain = _domain_from_url(profile.get("weburl"))
+    profile["domain"] = domain
+    if not profile.get("logo") and domain:
+        profile["logo"] = f"https://logo.clearbit.com/{domain}"
+
+    return profile
+
+
+@app.get("/stock/details/{symbol}")
+@app.get("/api/stock/details/{symbol}")
+def stock_details_endpoint(symbol: str):
+    sym = normalize_symbol(symbol)
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol is required")
+
+    quote = {}
+    profile = {}
+    metric = {}
+    basic_metric = {}
+    earnings_date = None
+    source = "Finnhub"
+    market_data_timestamp = None
+
+    try:
+        quote = _finnhub_get("/quote", {"symbol": sym}) or {}
+        quote_ts = int(quote.get("t") or 0)
+        if quote_ts > 0:
+            market_data_timestamp = datetime.utcfromtimestamp(quote_ts).isoformat() + "Z"
+        profile = _finnhub_get("/stock/profile2", {"symbol": sym}) or {}
+        metric_payload = _finnhub_get("/stock/metric", {"symbol": sym, "metric": "all"}) or {}
+        metric = (metric_payload.get("metric") if isinstance(metric_payload, dict) else {}) or {}
+        basic_payload = _finnhub_get("/stock/basic-financials", {"symbol": sym, "metric": "all"}) or {}
+        basic_metric = (basic_payload.get("metric") if isinstance(basic_payload, dict) else {}) or {}
+        try:
+            earnings_payload = _finnhub_get("/calendar/earnings", {"symbol": sym}) or {}
+            earnings_rows = earnings_payload.get("earningsCalendar") if isinstance(earnings_payload, dict) else []
+            if isinstance(earnings_rows, list) and earnings_rows:
+                earnings_date = earnings_rows[0].get("date")
+        except Exception:
+            earnings_date = None
+    except Exception as e:
+        logger.warning(f"Finnhub stock details unavailable for {sym}: {e}")
+        source = "FMP"
+        try:
+            fmp_quote_rows = _fmp_get(f"/quote/{sym}")
+            fmp_quote = fmp_quote_rows[0] if isinstance(fmp_quote_rows, list) and fmp_quote_rows else {}
+            fmp_profile_rows = _fmp_get(f"/profile/{sym}")
+            fmp_profile = fmp_profile_rows[0] if isinstance(fmp_profile_rows, list) and fmp_profile_rows else {}
+            fmp_key_metrics = _fmp_get(f"/key-metrics-ttm/{sym}")
+            fmp_metrics = fmp_key_metrics[0] if isinstance(fmp_key_metrics, list) and fmp_key_metrics else {}
+            fmp_ratios = {}
+            try:
+                ratio_rows = _fmp_get(f"/ratios-ttm/{sym}")
+                fmp_ratios = ratio_rows[0] if isinstance(ratio_rows, list) and ratio_rows else {}
+            except Exception:
+                fmp_ratios = {}
+            quote = {
+                "o": fmp_quote.get("open"),
+                "h": fmp_quote.get("dayHigh"),
+                "l": fmp_quote.get("dayLow"),
+                "pc": fmp_quote.get("previousClose"),
+                "v": fmp_quote.get("volume"),
+                "c": fmp_quote.get("price"),
+            }
+            profile = {"marketCapitalization": fmp_profile.get("mktCap"), "name": fmp_profile.get("companyName")}
+            metric = {
+                "52WeekHigh": fmp_quote.get("yearHigh"),
+                "52WeekLow": fmp_quote.get("yearLow"),
+                "beta": fmp_profile.get("beta"),
+                "peTTM": fmp_quote.get("pe"),
+                "epsTTM": fmp_quote.get("eps"),
+                "3MonthAverageTradingVolume": fmp_quote.get("avgVolume"),
+                "dividendYieldIndicatedAnnual": fmp_quote.get("dividendYield") or fmp_ratios.get("dividendYielTTM"),
+                "dividendPerShareAnnual": fmp_quote.get("lastDiv"),
+                "exDividendDate": fmp_profile.get("lastDiv"),
+                "targetMeanPrice": fmp_quote.get("priceTarget"),
+                "revenueTTM": fmp_metrics.get("revenuePerShareTTM"),
+                "freeCashFlowTTM": fmp_metrics.get("freeCashFlowPerShareTTM"),
+                "grossMarginTTM": fmp_ratios.get("grossProfitMarginTTM"),
+            }
+            basic_metric = {
+                "52WeekHigh": fmp_quote.get("yearHigh"),
+                "52WeekLow": fmp_quote.get("yearLow"),
+                "peTTM": fmp_quote.get("pe"),
+                "epsTTM": fmp_quote.get("eps"),
+                "revenueTTM": fmp_metrics.get("revenuePerShareTTM"),
+                "freeCashFlowTTM": fmp_metrics.get("freeCashFlowPerShareTTM"),
+                "grossMarginTTM": fmp_ratios.get("grossProfitMarginTTM"),
+            }
+            earnings_date = fmp_profile.get("ipoDate")
+        except Exception as fmp_error:
+            logger.warning(f"FMP stock details unavailable for {sym}: {fmp_error}")
+            source = "YahooFallback"
+            try:
+                stock_1m = get_stock_data(sym, "1m")
+                stock_1y = get_stock_data(sym, "1y")
+                history_1m = stock_1m.get("history", []) or []
+                history_1y = stock_1y.get("history", []) or []
+                latest = safe_float(stock_1m.get("price"))
+                previous = safe_float(stock_1m.get("previous_close")) or _fetch_yfinance_previous_close(sym)
+                latest_row = history_1m[-1] if history_1m else {}
+                day_low = safe_float(latest_row.get("low"))
+                day_high = safe_float(latest_row.get("high"))
+                week_52_low = min([safe_float(r.get("low")) for r in history_1y if safe_float(r.get("low")) > 0], default=0.0)
+                week_52_high = max([safe_float(r.get("high")) for r in history_1y if safe_float(r.get("high")) > 0], default=0.0)
+                latest_volume = int(history_1m[-1].get("volume") or 0) if history_1m else 0
+                avg_volume = int(
+                    sum(int(r.get("volume") or 0) for r in history_1m[-20:]) / max(1, len(history_1m[-20:]))
+                ) if history_1m else 0
+
+                info = {}
+                fast_info = {}
+                calendar = {}
+                for yf_symbol in _symbol_variants(sym):
+                    try:
+                        ticker = yf.Ticker(yf_symbol)
+                        try:
+                            info = ticker.info or {}
+                        except Exception:
+                            info = {}
+                        try:
+                            fast_info = ticker.fast_info or {}
+                        except Exception:
+                            fast_info = {}
+                        try:
+                            cal = ticker.calendar
+                            calendar = cal if isinstance(cal, dict) else {}
+                        except Exception:
+                            calendar = {}
+                        if info or fast_info:
+                            break
+                    except Exception:
+                        continue
+                open_price = safe_float(info.get("open") or fast_info.get("open"))
+                if open_price <= 0 and history_1m:
+                    open_price = safe_float(history_1m[0].get("open"))
+
+                quote = {
+                    "o": open_price,
+                    "h": day_high,
+                    "l": day_low,
+                    "pc": previous,
+                    "v": latest_volume,
+                    "c": latest,
+                    "b": info.get("bid"),
+                    "a": info.get("ask"),
+                }
+                profile = {
+                    "marketCapitalization": info.get("marketCap") or fast_info.get("marketCap") or fast_info.get("market_cap"),
+                    "name": stock_1m.get("name") or sym,
+                }
+                dividend_yield_raw = info.get("dividendYield")
+                if dividend_yield_raw is not None:
+                    try:
+                        dividend_yield_raw = float(dividend_yield_raw)
+                        if abs(dividend_yield_raw) <= 1:
+                            dividend_yield_raw = dividend_yield_raw * 100.0
+                    except Exception:
+                        dividend_yield_raw = None
+                metric = {
+                    "52WeekHigh": week_52_high,
+                    "52WeekLow": week_52_low,
+                    "beta": info.get("beta"),
+                    "peTTM": info.get("trailingPE"),
+                    "epsTTM": info.get("trailingEps"),
+                    "3MonthAverageTradingVolume": info.get("averageVolume") or fast_info.get("threeMonthAverageVolume") or avg_volume,
+                    "dividendYieldIndicatedAnnual": dividend_yield_raw,
+                    "dividendPerShareAnnual": info.get("dividendRate"),
+                    "targetMeanPrice": info.get("targetMeanPrice"),
+                    "exDividendDate": info.get("exDividendDate") or calendar.get("Ex-Dividend Date"),
+                    "revenueTTM": info.get("totalRevenue"),
+                    "freeCashFlowTTM": info.get("freeCashflow"),
+                    "grossMarginTTM": info.get("grossMargins"),
+                }
+                basic_metric = metric
+                calendar_earnings = calendar.get("Earnings Date")
+                if isinstance(calendar_earnings, list) and calendar_earnings:
+                    earnings_date = calendar_earnings[0]
+                else:
+                    earnings_date = info.get("earningsTimestamp")
+            except Exception as yf_error:
+                raise HTTPException(status_code=500, detail=f"Unable to load stock details for {sym}: {yf_error}")
+
+    def _to_float_or_none(value):
+        if value is None or value == "":
+            return None
+        try:
+            f = float(value)
+            if math.isnan(f) or math.isinf(f):
+                return None
+            return f
+        except Exception:
+            return None
+
+    def _pick_optional(*values):
+        for v in values:
+            f = _to_float_or_none(v)
+            if f is not None:
+                return f
+        return None
+
+    def _to_percent(value):
+        f = _to_float_or_none(value)
+        if f is None:
+            return None
+        return (f * 100.0) if abs(f) <= 1 else f
+
+    previous_close = _pick_optional(quote.get("pc"))
+    open_price = _pick_optional(quote.get("o"))
+    bid_price = _pick_optional(quote.get("b"), metric.get("bid"), basic_metric.get("bid"))
+    ask_price = _pick_optional(quote.get("a"), metric.get("ask"), basic_metric.get("ask"))
+    day_low = _pick_optional(quote.get("l"))
+    day_high = _pick_optional(quote.get("h"))
+    week_52_low = _pick_optional(metric.get("52WeekLow"), basic_metric.get("52WeekLow"))
+    week_52_high = _pick_optional(metric.get("52WeekHigh"), basic_metric.get("52WeekHigh"))
+    volume_raw = _pick_optional(quote.get("v"), metric.get("10DayAverageTradingVolume"))
+    avg_volume_raw = _pick_optional(metric.get("3MonthAverageTradingVolume"), basic_metric.get("3MonthAverageTradingVolume"), metric.get("10DayAverageTradingVolume"))
+    market_cap_raw = _pick_optional(profile.get("marketCapitalization"), metric.get("marketCapitalization"), basic_metric.get("marketCapitalization"))
+    beta = _pick_optional(metric.get("beta"), basic_metric.get("beta"))
+    pe_ratio = _pick_optional(metric.get("peTTM"), basic_metric.get("peTTM"), metric.get("peNormalizedAnnual"), basic_metric.get("peNormalizedAnnual"))
+    eps_ttm = _pick_optional(metric.get("epsTTM"), basic_metric.get("epsTTM"), metric.get("epsInclExtraItemsTTM"), basic_metric.get("epsInclExtraItemsTTM"))
+    dividend_yield_pct = _to_percent(_pick_optional(metric.get("dividendYieldIndicatedAnnual"), basic_metric.get("dividendYieldIndicatedAnnual"), metric.get("currentDividendYieldTTM"), basic_metric.get("currentDividendYieldTTM")))
+    forward_dividend = _pick_optional(metric.get("dividendPerShareAnnual"), basic_metric.get("dividendPerShareAnnual"))
+    ex_dividend_date = metric.get("exDividendDate") or basic_metric.get("exDividendDate")
+    target_price = _pick_optional(metric.get("targetMeanPrice"), basic_metric.get("targetMeanPrice"))
+    revenue_ttm = _pick_optional(metric.get("revenueTTM"), basic_metric.get("revenueTTM"), metric.get("totalRevenueTTM"), basic_metric.get("totalRevenueTTM"))
+    free_cash_flow = _pick_optional(metric.get("freeCashFlowTTM"), basic_metric.get("freeCashFlowTTM"), metric.get("fcfTTM"), basic_metric.get("fcfTTM"))
+    gross_margin = _to_percent(_pick_optional(metric.get("grossMarginTTM"), basic_metric.get("grossMarginTTM"), metric.get("grossMarginAnnual"), basic_metric.get("grossMarginAnnual")))
+    price_for_yield = _pick_optional(quote.get("c"), quote.get("pc"))
+    # Normalize yield scale and recover from noisy upstream values.
+    if dividend_yield_pct is not None:
+        if dividend_yield_pct > 25 and forward_dividend is not None and price_for_yield is not None and price_for_yield > 0:
+            dividend_yield_pct = (forward_dividend / price_for_yield) * 100.0
+        elif dividend_yield_pct > 25:
+            dividend_yield_pct = dividend_yield_pct / 100.0
+    if (
+        dividend_yield_pct is not None
+        and forward_dividend is not None
+        and price_for_yield is not None
+        and price_for_yield > 0
+    ):
+        implied_yield = (forward_dividend / price_for_yield) * 100.0
+        if abs(dividend_yield_pct - implied_yield) > 1.0:
+            dividend_yield_pct = implied_yield
+    if (dividend_yield_pct is None or dividend_yield_pct <= 0) and forward_dividend is not None and price_for_yield is not None and price_for_yield > 0:
+        dividend_yield_pct = (forward_dividend / price_for_yield) * 100.0
+
+    if earnings_date and isinstance(earnings_date, (int, float)):
+        try:
+            earnings_date = datetime.utcfromtimestamp(int(earnings_date)).date().isoformat()
+        except Exception:
+            earnings_date = None
+
+    volume = int(volume_raw) if volume_raw is not None else None
+    avg_volume = int(avg_volume_raw) if avg_volume_raw is not None else None
+
+    return {
+        "symbol": sym,
+        "source": source,
+        "marketDataTimestamp": market_data_timestamp,
+        "updatedAt": datetime.utcnow().isoformat() + "Z",
+        "previousClose": previous_close,
+        "open": open_price,
+        "bid": bid_price,
+        "ask": ask_price,
+        "dayHigh": day_high,
+        "dayLow": day_low,
+        "dayRange": f"{day_low:.2f} - {day_high:.2f}" if day_low is not None and day_high is not None else None,
+        "week52High": week_52_high,
+        "week52Low": week_52_low,
+        "week52Range": f"{week_52_low:.2f} - {week_52_high:.2f}" if week_52_low is not None and week_52_high is not None else None,
+        "volume": volume,
+        "avgVolume": avg_volume,
+        "marketCap": market_cap_raw,
+        "marketCapRaw": market_cap_raw,
+        "beta": beta,
+        "peRatio": pe_ratio,
+        "eps": eps_ttm,
+        "earningsDate": earnings_date,
+        "forwardDividend": forward_dividend,
+        "dividendYield": dividend_yield_pct,
+        "exDividendDate": ex_dividend_date,
+        "targetPrice": target_price,
+        "revenueTTM": revenue_ttm,
+        "freeCashFlow": free_cash_flow,
+        "grossMargin": gross_margin,
+        "companyName": profile.get("name") or sym,
+    }
+
+
+@app.get("/stock/financials/{symbol}")
+@app.get("/api/stock/financials/{symbol}")
+def stock_financials_endpoint(symbol: str):
+    return stock_details_endpoint(symbol)
 
 
 @app.get("/stock-history")

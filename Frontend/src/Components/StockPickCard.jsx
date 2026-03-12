@@ -16,6 +16,13 @@ function ScoreBar({ score }) {
 }
 
 function ConfidenceGauge({ score }) {
+  if (!Number.isFinite(score)) {
+    return (
+      <div className="w-16 h-16 rounded-full border border-slate-300 grid place-items-center text-[11px] font-semibold text-slate-500">
+        N/A
+      </div>
+    );
+  }
   const pct = Math.max(0, Math.min(100, score));
   const r = 24;
   const c = 2 * Math.PI * r;

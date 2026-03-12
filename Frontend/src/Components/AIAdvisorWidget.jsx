@@ -10,7 +10,6 @@ import { formatAssistantResponse, getFollowupPrompts } from "../utils/aiAdvisor"
 
 const ENDPOINTS = [
   "/api-fastapi/api/ai-advisor",
-  "http://localhost:8000/api/ai-advisor",
 ];
 
 const BASE_PROMPTS = [
@@ -52,8 +51,10 @@ function now() {
 }
 
 function extractSymbolFromText(text = "") {
-  const m = String(text || "").toUpperCase().match(/\b[A-Z]{1,5}(?:[.-][A-Z])?\b/);
-  return m?.[0] || "";
+  const stop = new Set(["IS", "ARE", "WAS", "WERE", "THE", "THIS", "THAT", "A", "AN", "AND", "OR", "VS"]);
+  const matches = String(text || "").toUpperCase().match(/\b[A-Z]{2,5}(?:[.-][A-Z])?\b/g) || [];
+  const found = matches.find((s) => !stop.has(s));
+  return found || "";
 }
 
 export default function AIAdvisorWidget({ context, dark = false }) {

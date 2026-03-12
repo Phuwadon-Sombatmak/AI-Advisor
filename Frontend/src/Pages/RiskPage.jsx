@@ -4,28 +4,6 @@ import { TrendingUp, AlertTriangle, ShieldCheck, BarChart2, ChevronLeft } from "
 
 const API_BASE = "http://localhost:8000";
 
-/**
- * ฟังก์ชันจำลองข้อมูล (Fallback Logic)
- * ใช้ในกรณี API ส่งค่าว่าง เพื่อให้ระบบยังสามารถแสดงผลแนวทางการลงทุนได้
- */
-const generateMockStocks = (level) => {
-  const configs = {
-    LOW: { count: 3, riskRange: [1, 3], volRange: [0.1, 0.2], prefix: "DEF" },
-    MEDIUM: { count: 4, riskRange: [4, 7], volRange: [0.2, 0.5], prefix: "GRW" },
-    HIGH: { count: 5, riskRange: [8, 10], volRange: [0.5, 1.2], prefix: "SPEC" }
-  };
-  const conf = configs[level] || configs.LOW;
-  return Array.from({ length: conf.count }).map((_, i) => ({
-    Symbol: `${conf.prefix}-${100 + i}`,
-    risk_label: level,
-    risk_score: (Math.random() * (conf.riskRange[1] - conf.riskRange[0]) + conf.riskRange[0]).toFixed(2),
-    vol90: (Math.random() * (conf.volRange[1] - conf.volRange[0]) + conf.volRange[0]).toFixed(4),
-    mdd1y: -(Math.random() * (conf.riskRange[1] * 0.05)).toFixed(4),
-    ret30: (Math.random() * (conf.riskRange[1] * 0.02) - 0.02).toFixed(4),
-    is_mock: true
-  }));
-};
-
 export default function App() {
   const navigate = useNavigate();
 
@@ -68,17 +46,11 @@ export default function App() {
         const data = await res.json();
         let items = data.items || data.data || data || [];
 
-        // บั๊กแก้ไข: ถ้า API ส่ง items เป็น [] ให้ใช้ Math Simulation แทนเพื่อไม่ให้หน้าว่าง
-        if (!Array.isArray(items) || items.length === 0) {
-          console.warn("API returned empty list, using AI Math Simulation...");
-          items = generateMockStocks(level);
-        }
-
-        setRecs(items);
+        setRecs(Array.isArray(items) ? items : []);
       } catch (e) {
         console.error("Fetch error:", e);
-        setErr("ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ กำลังแสดงข้อมูลจำลอง...");
-        setRecs(generateMockStocks(selectedRisk.toUpperCase()));
+        setErr("ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้");
+        setRecs([]);
       } finally {
         setLoading(false);
       }
@@ -204,7 +176,6 @@ export default function App() {
                           <a href={`/stock/${r.Symbol}`} className="font-bold text-blue-600 dark:text-blue-400 hover:underline">
                             {r.Symbol}
                           </a>
-                          {r.is_mock && <span className="text-[10px] text-orange-400">Simulated by AI</span>}
                         </div>
                       </td>
                       <td className="px-6 py-4">

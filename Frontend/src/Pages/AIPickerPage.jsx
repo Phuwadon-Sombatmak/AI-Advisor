@@ -14,7 +14,7 @@ export default function AIPickerPage() {
   // ==========================================
   // Gemini AI States
   // ==========================================
-  const apiKey = "AIzaSyA4H574NZIuID7c4kFVUCGw-noWZkyydVY"; // API Key จะถูกจัดการโดยระบบ
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
   const [marketInsight, setMarketInsight] = useState('');
   const [insightLoading, setInsightLoading] = useState(false);
   
@@ -58,6 +58,9 @@ export default function AIPickerPage() {
   // API Call Function
   const callGeminiAPI = async (prompt, systemInstruction = "", retryCount = 0) => {
     const delays = [1000, 2000, 4000, 8000, 16000];
+    if (!apiKey) {
+      return "Data unavailable for AI reasoning (missing Gemini API key).";
+    }
     try {
       const payload = { contents: [{ parts: [{ text: prompt }] }] };
       if (systemInstruction) payload.systemInstruction = { parts: [{ text: systemInstruction }] };
@@ -70,7 +73,7 @@ export default function AIPickerPage() {
 
       if (!response.ok) throw new Error('API Request Failed');
       const result = await response.json();
-      return result.candidates?.[0]?.content?.parts?.[0]?.text || "ไม่พบคำตอบจาก AI";
+      return result.candidates?.[0]?.content?.parts?.[0]?.text || "ไม่พบข้อมูลวิเคราะห์จาก AI";
     } catch {
       if (retryCount < 5) {
         await new Promise(resolve => setTimeout(resolve, delays[retryCount]));
@@ -87,9 +90,7 @@ export default function AIPickerPage() {
       `ประเมินภาวะตลาดหุ้นปัจจุบัน สำหรับนักลงทุนสไตล์ ${stratObj.label} ควรเน้นกลุ่มอุตสาหกรรมใด สรุปสั้นๆ 3 ข้อ`,
       "คุณคือนักวิเคราะห์การลงทุนมืออาชีพ เขียนสรุปให้กระชับ เป็นภาษาไทย"
     );
-    // Mock response for quick preview if API fails/empty
-    setMarketInsight(text === "ไม่พบคำตอบจาก AI" ? 
-      "1. ตลาดปัจจุบันมีความผันผวนจากอัตราดอกเบี้ย\n2. กลุ่มเทคโนโลยีและ AI ยังมีแรงส่งที่ดี\n3. ควรจับตาดูตัวเลขเงินเฟ้อในสัปดาห์หน้า" : text);
+    setMarketInsight(text);
     setInsightLoading(false);
   };
 
@@ -105,7 +106,7 @@ export default function AIPickerPage() {
       `หุ้น ${stock.symbol} ราคา $${stock.latest_price}. วิเคราะห์จุดแข็ง จุดอ่อน ความเหมาะสมกับกลยุทธ์ ${strategy} สั้นๆ 3 บรรทัด`,
       "คุณคือนักวิเคราะห์หุ้นสาย Technical และ Fundamental ให้คำปรึกษาอย่างเป็นกลาง"
     );
-    setDetailedAnalysis(prev => ({ ...prev, [stock.symbol]: text === "ไม่พบคำตอบจาก AI" ? "หุ้นตัวนี้มีกระแสเงินสดแข็งแกร่งและเป็นผู้นำในอุตสาหกรรม เหมาะสำหรับการถือครองระยะยาวเพื่อลดความผันผวนของพอร์ตลงทุน" : text }));
+    setDetailedAnalysis(prev => ({ ...prev, [stock.symbol]: text }));
   };
 
   const askCustomQuestion = async (e) => {
@@ -116,7 +117,7 @@ export default function AIPickerPage() {
       `กลยุทธ์: ${strategy}, หุ้นแนะนำ: ${picks.map(p => p.symbol).join(', ')}. คำถาม: ${customQuestion}`,
       "คุณคือ AI ผู้ช่วยนักลงทุน ตอบสั้นๆ ตรงประเด็น เป็นภาษาไทย"
     );
-    setChatResponse(text === "ไม่พบคำตอบจาก AI" ? "จากพอร์ตปัจจุบัน แนะนำให้ทยอยสะสมในจังหวะที่ตลาดย่อตัวครับ" : text);
+    setChatResponse(text);
     setChatLoading(false);
   };
 
@@ -126,21 +127,10 @@ export default function AIPickerPage() {
       const response = await fetch(`http://localhost:8000/ai-picker?strategy=${strategy}&limit=5`);
       if (!response.ok) throw new Error('Network error');
       const data = await response.json();
-      setPicks(data || []);
+      setPicks(Array.isArray(data?.items) ? data.items : []);
     } catch {
-      // Premium Mock Data for visually stunning preview
-      const allMocks = [
-        { symbol: 'NVDA', name: 'NVIDIA Corp', latest_price: 850.20, ret30: 15.5, ai_score: 98, reason: 'ผู้นำตลาด AI Chip & โมเมนตัมขาขึ้น', type: 'AGGRESSIVE' },
-        { symbol: 'MSFT', name: 'Microsoft Corp', latest_price: 420.10, ret30: 6.8, ai_score: 92, reason: 'รายได้ Cloud เติบโตแข็งแกร่ง', type: 'BALANCED' },
-        { symbol: 'AAPL', name: 'Apple Inc', latest_price: 185.50, ret30: 2.2, ai_score: 88, reason: 'กระแสเงินสดสูง & ซื้อหุ้นคืน', type: 'DEFENSIVE' },
-        { symbol: 'JNJ', name: 'Johnson & Johnson', latest_price: 155.30, ret30: -1.5, ai_score: 85, reason: 'ปันผลสม่ำเสมอ & ผันผวนต่ำ', type: 'DEFENSIVE' },
-        { symbol: 'META', name: 'Meta Platforms', latest_price: 480.00, ret30: 12.4, ai_score: 94, reason: 'ค่าโฆษณาฟื้นตัว & กำไรโตกระโดด', type: 'AGGRESSIVE' },
-        { symbol: 'V', name: 'Visa Inc', latest_price: 280.90, ret30: 4.5, ai_score: 89, reason: 'ผูกขาดตลาดการชำระเงิน', type: 'BALANCED' },
-      ];
-      setTimeout(() => {
-        setPicks(allMocks.filter(s => s.type === strategy || strategy === 'BALANCED').slice(0, 3));
-        setLoading(false);
-      }, 800);
+      setPicks([]);
+      setLoading(false);
     }
   }, [strategy]);
 

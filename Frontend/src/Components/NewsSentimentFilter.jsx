@@ -30,8 +30,9 @@ export default function NewsSentimentFilter({ items = [], dark = false, loading 
         ? formatDateByLang(dateRaw, i18n.language)
         : "-";
 
+      const baseId = item.id || item.link || `${item.title || "news"}-${idx}`;
       return {
-        id: item.id || item.link || `${item.title || "news"}-${idx}`,
+        id: `${baseId}-${idx}`,
         title: item.title || "Untitled news",
         provider: item.provider || item.source || "Yahoo Finance RSS",
         link: item.link || "#",
