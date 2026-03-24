@@ -22,34 +22,13 @@ function SearchPageContent() {
     const fetchNews = async () => {
       setLoadingNews(true);
       try {
-        // ลองดึงจาก Backend
-        const res = await fetch("http://127.0.0.1:8000/api/news");
+        const res = await fetch("/api-fastapi/api/news");
         if (!res.ok) throw new Error("Network error");
         const data = await res.json();
         setDailyNews(data.news || []);
       } catch (e) {
-        console.warn("⚠️ เชื่อมต่อ Backend ไม่ได้ ระบบจะแสดงข่าวสารจำลองแทน", e);
-        // Fallback: ข้อมูลจำลองหาก Backend ไม่ทำงาน
-        setDailyNews([
-          { 
-            title: "NVIDIA เผยชิป AI รุ่นใหม่ ดันหุ้นกลุ่มเทคโนโลยีพุ่งทะยาน", 
-            provider: "Tech Daily", 
-            link: "#",
-            image: "https://images.unsplash.com/photo-1614064641913-a53b15680334?w=500&q=80"
-          },
-          { 
-            title: "Apple เตรียมเปิดตัวอุปกรณ์สวมใส่รุ่นใหม่ คาดทำยอดขายทะลุเป้า", 
-            provider: "Market Watch", 
-            link: "#",
-            image: "https://images.unsplash.com/photo-1510557880182-3d4d3cba35a5?w=500&q=80"
-          },
-          { 
-            title: "ธนาคารกลางสหรัฐฯ ส่งสัญญาณคงอัตราดอกเบี้ย นักลงทุนจับตาใกล้ชิด", 
-            provider: "Finance News", 
-            link: "#",
-            image: "https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?w=500&q=80"
-          }
-        ]);
+        console.warn("⚠️ เชื่อมต่อ Backend ไม่ได้ ระบบจะแสดงเฉพาะข้อมูลจริงเมื่อ API พร้อมใช้งาน", e);
+        setDailyNews([]);
       } finally {
         setLoadingNews(false);
       }
@@ -68,27 +47,30 @@ function SearchPageContent() {
   // ฟังก์ชัน AI วิเคราะห์ข่าว
   const generateMarketAnalysis = async () => {
     if (dailyNews.length === 0) return;
-    
     setAiState({ loading: true, result: null, error: null });
-    const apiKey = ""; // API Key ฉีดผ่าน Canvas อัตโนมัติ
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-    
-    const newsText = dailyNews.map((n, i) => `${i + 1}. ${n.title}`).join("\n");
-    const payload = {
-      contents: [{ parts: [{ text: `วิเคราะห์ข่าวเหล่านี้แล้วสรุปภาพรวมตลาด (Bullish/Bearish/Neutral) สั้นๆ กระชับ:\n${newsText}` }] }],
-      systemInstruction: { parts: [{ text: "คุณคือนักวิเคราะห์การเงิน สรุปข่าวเป็นภาษาไทยที่อ่านเข้าใจง่าย" }] }
-    };
 
     try {
-      const response = await fetch(url, {
+      const response = await fetch("/api-fastapi/api/ai-summary", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          context: {
+            watchlist: [],
+            recent_searches: stocksList.map((s) => s.symbol),
+            top_news_titles: dailyNews.slice(0, 10).map((n) => String(n.title || "")),
+          },
+        }),
       });
-      
-      if (!response.ok) throw new Error(`API Error`);
+      if (!response.ok) throw new Error("API Error");
       const data = await response.json();
-      const textResult = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      const summary = data?.summary || {};
+      const textResult = [
+        `Market Sentiment: ${summary.market_sentiment || "N/A"}`,
+        `Fear & Greed: ${summary.fear_greed_index ?? "N/A"}`,
+        `Top AI Pick: ${summary.top_ai_pick || "N/A"}`,
+        `Trending Sector: ${summary.trending_sector || "N/A"}`,
+        `Risk Outlook: ${summary.risk_outlook || "N/A"}`,
+      ].join("\n");
       
       if (textResult) {
         setAiState({ loading: false, result: textResult, error: null });
@@ -165,7 +147,15 @@ function SearchPageContent() {
             {dailyNews.map((news, i) => (
               <a key={i} href={news.link} target="_blank" rel="noopener noreferrer" className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-sm hover:shadow-xl transition-all duration-300 group flex flex-col h-full">
                 <div className="h-48 bg-slate-200 overflow-hidden shrink-0">
-                  <img src={news.image} alt="news" className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" />
+                  <img
+                    src={news.image}
+                    alt="news"
+                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
+                    onError={(e) => {
+                      e.currentTarget.onerror = null;
+                      e.currentTarget.style.display = "none";
+                    }}
+                  />
                 </div>
                 <div className="p-6 flex flex-col grow">
                   <p className="text-xs font-bold text-indigo-600 mb-2 uppercase tracking-wide">{news.provider}</p>

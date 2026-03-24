@@ -4,6 +4,35 @@ import { Bar, BarChart, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import ConfidenceFooter from "./ConfidenceFooter";
 import { buildMarketSummary } from "../utils/aiAdvisor";
 
+function formatForecastValue(value) {
+  if (value == null || value === "" || Number.isNaN(Number(value))) {
+    return "N/A";
+  }
+
+  const numeric = Number(value);
+  return `${numeric >= 0 ? "+" : ""}${numeric.toFixed(2)}%`;
+}
+
+function SourceTags({ tags = [], dark }) {
+  if (!Array.isArray(tags) || tags.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {tags.map((tag) => (
+        <span
+          key={tag}
+          className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold ${
+            dark
+              ? "bg-slate-900/80 border-slate-600 text-cyan-200"
+              : "bg-slate-50 border-slate-200 text-slate-600"
+          }`}
+        >
+          {tag}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function ChartBlock({ charts, dark }) {
   if (!charts) return null;
   const price = charts?.price?.points || [];
@@ -14,8 +43,8 @@ function ChartBlock({ charts, dark }) {
       {price.length > 0 ? (
         <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2`}>
           <p className="text-[11px] font-semibold text-slate-500 mb-1">{charts?.price?.title || "Price chart"}</p>
-          <div className="h-24">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="h-24 min-w-0">
+            <ResponsiveContainer width="100%" height={96} minWidth={0} minHeight={96}>
               <LineChart data={price}>
                 <XAxis dataKey="label" hide />
                 <YAxis hide domain={["dataMin", "dataMax"]} />
@@ -29,8 +58,8 @@ function ChartBlock({ charts, dark }) {
       {sentiment.length > 0 ? (
         <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2`}>
           <p className="text-[11px] font-semibold text-slate-500 mb-1">{charts?.sentiment?.title || "Sentiment chart"}</p>
-          <div className="h-24">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="h-24 min-w-0">
+            <ResponsiveContainer width="100%" height={96} minWidth={0} minHeight={96}>
               <BarChart data={sentiment}>
                 <XAxis dataKey="label" hide />
                 <YAxis hide domain={[-1, 1]} />
@@ -45,48 +74,87 @@ function ChartBlock({ charts, dark }) {
   );
 }
 
-function ComparisonBlock({ schema, dark }) {
-  const comp = schema?.comparison;
-  const categories = Array.isArray(comp?.categories) ? comp.categories : [];
-  if (!comp || categories.length === 0) return null;
-  return (
-    <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} mt-2 rounded-xl border p-2.5`}>
-      <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Side-by-Side</p>
-      <div className="mt-1 overflow-x-auto">
-        <table className="min-w-[320px] w-full text-[12px]">
-          <thead>
-            <tr className="text-slate-500">
-              <th className="text-left py-1 pr-2">Metric</th>
-              <th className="text-left py-1 pr-2">{comp.left_symbol}</th>
-              <th className="text-left py-1 pr-2">{comp.right_symbol}</th>
-              <th className="text-left py-1">Leader</th>
-            </tr>
-          </thead>
-          <tbody>
-            {categories.map((row, idx) => (
-              <tr key={`${row.label}-${idx}`} className="border-t border-slate-200/30">
-                <td className="py-1 pr-2">{row.label}</td>
-                <td className="py-1 pr-2">{row.left_value}</td>
-                <td className="py-1 pr-2">{row.right_value}</td>
-                <td className="py-1 font-semibold">{row.winner}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+function getStructuredLead(schema, intent) {
+  if (!schema || typeof schema !== "object") return null;
+  const hasStructuredStock =
+    schema?.stock_overview && schema?.market_context && schema?.technical_signals_section && schema?.investment_interpretation;
+  const hasStructuredSector =
+    schema?.market_context && schema?.sector_analysis && schema?.investment_interpretation;
+  const hasTrending = intent === "trending_stock_discovery" && Array.isArray(schema?.trending_stocks);
+
+  if (hasStructuredStock || hasStructuredSector || hasTrending) {
+    return typeof schema.direct_answer === "string" && schema.direct_answer.trim()
+      ? schema.direct_answer.trim()
+      : null;
+  }
+
+  return null;
 }
 
 function StructuredAnswer({ schema, summary, intent, dark }) {
   if (!schema || typeof schema !== "object") return null;
-  const stockOverview = schema?.stock_overview || null;
-  const marketSignals = schema?.market_signals || null;
-  const investmentView = schema?.investment_view || null;
-  if (stockOverview && marketSignals && investmentView) {
-    const risks = Array.isArray(schema?.risks) ? schema.risks.slice(0, 4) : [];
+  if (intent === "trending_stock_discovery" && Array.isArray(schema?.trending_stocks)) {
+    const marketContext = schema?.market_context || {};
     return (
       <div className="mt-2 space-y-2 text-[13px]">
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold inline-flex items-center gap-1.5">
+            <BarChart3 size={12} className="text-blue-500" /> Market Context
+          </p>
+          <ul className="mt-1 space-y-1">
+            <li>• Market sentiment: {marketContext.market_sentiment || "Relevant data is not available."}</li>
+            <li>• Fear &amp; Greed: {marketContext.fear_greed_index ?? "Relevant data is not available."}</li>
+            <li>• Leading sector: {marketContext.top_sector || "Relevant data is not available."}</li>
+          </ul>
+        </div>
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold inline-flex items-center gap-1.5">
+            <LineChartIcon size={12} className="text-cyan-500" /> Trending Stocks
+          </p>
+          <div className="mt-2 space-y-2">
+            {schema.trending_stocks.slice(0, 5).map((item) => (
+              <div key={item.symbol} className={`${dark ? "bg-slate-950/70" : "bg-slate-50"} rounded-lg px-3 py-2`}>
+                <p className="font-semibold">{item.name} ({item.symbol})</p>
+                <p className="text-[12px] text-slate-500">
+                  Price: ${Number(item.price || 0).toFixed(2)}
+                  {item.change_pct != null ? ` • Day change ${Number(item.change_pct) >= 0 ? "+" : ""}${Number(item.change_pct).toFixed(2)}%` : ""}
+                  {item.month_return != null ? ` • 1M return ${Number(item.month_return) >= 0 ? "+" : ""}${Number(item.month_return).toFixed(2)}%` : ""}
+                </p>
+                <p className="text-[12px] mt-1">{item.reason || "Relevant data is not available."}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+  const stockOverview = schema?.stock_overview || null;
+  const marketContext = schema?.market_context || null;
+  const technicalSignalsSection = schema?.technical_signals_section || null;
+  const fundamentalDrivers = schema?.fundamental_drivers || null;
+  const riskFactors = schema?.risk_factors || null;
+  const investmentInterpretation = schema?.investment_interpretation || null;
+  if (stockOverview && marketContext && technicalSignalsSection && investmentInterpretation) {
+    const risks = Array.isArray(riskFactors?.points)
+      ? riskFactors.points.slice(0, 4)
+      : Array.isArray(schema?.risks)
+        ? schema.risks.slice(0, 4)
+        : [];
+    const marketContextPoints = Array.isArray(marketContext?.points) ? marketContext.points.slice(0, 3) : [];
+    const technicalPoints = Array.isArray(technicalSignalsSection?.points) ? technicalSignalsSection.points.slice(0, 5) : [];
+    const driverPoints = Array.isArray(fundamentalDrivers?.points) ? fundamentalDrivers.points.slice(0, 4) : [];
+    return (
+      <div className="mt-2 space-y-2 text-[13px]">
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold inline-flex items-center gap-1.5">
+            <Building2 size={12} className="text-blue-500" /> Market Context
+          </p>
+          <ul className="mt-1 space-y-1">
+            {marketContextPoints.map((line, idx) => (
+              <li key={`${line}-${idx}`} className="leading-relaxed">• {line}</li>
+            ))}
+          </ul>
+        </div>
         <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
           <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold inline-flex items-center gap-1.5">
             <Building2 size={12} className="text-blue-500" /> Stock Overview
@@ -95,22 +163,37 @@ function StructuredAnswer({ schema, summary, intent, dark }) {
           <p className="text-[12px] text-slate-500 mt-0.5">
             {stockOverview.sector} • {stockOverview.industry}
           </p>
-          {stockOverview.price ? <p className="mt-1 font-medium">Price: ${Number(stockOverview.price).toFixed(2)}</p> : null}
+          {stockOverview.price != null ? <p className="mt-1 font-medium">Price: ${Number(stockOverview.price).toFixed(2)}</p> : null}
+          {stockOverview.price_change != null || stockOverview.price_change_pct != null ? (
+            <p className="text-[12px] text-slate-500 mt-0.5">
+              Change: {stockOverview.price_change != null ? `${Number(stockOverview.price_change) >= 0 ? "+" : ""}${Number(stockOverview.price_change).toFixed(2)}` : "N/A"}
+              {stockOverview.price_change_pct != null ? ` (${Number(stockOverview.price_change_pct) >= 0 ? "+" : ""}${Number(stockOverview.price_change_pct).toFixed(2)}%)` : ""}
+            </p>
+          ) : null}
         </div>
         <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
           <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold inline-flex items-center gap-1.5">
-            <LineChartIcon size={12} className="text-cyan-500" /> Market Signals
+            <LineChartIcon size={12} className="text-cyan-500" /> Technical Signals
           </p>
           <ul className="mt-1 space-y-1">
-            <li>• Technical trend: {marketSignals.technical_trend}</li>
-            <li>• Momentum: {marketSignals.momentum}</li>
-            <li>• News sentiment: {marketSignals.news_sentiment}</li>
-            <li>• Fear & Greed: {marketSignals.fear_greed_index} ({marketSignals.market_regime})</li>
+            {technicalPoints.map((line, idx) => (
+              <li key={`${line}-${idx}`} className="leading-relaxed">• {line}</li>
+            ))}
           </ul>
         </div>
         <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
           <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold inline-flex items-center gap-1.5">
-            <ShieldAlert size={12} className="text-rose-500" /> Key Risks
+            <BarChart3 size={12} className="text-emerald-500" /> Fundamental Drivers
+          </p>
+          <ul className="mt-1 space-y-1">
+            {driverPoints.length ? driverPoints.map((line, idx) => (
+              <li key={`${line}-${idx}`} className="leading-relaxed">• {line}</li>
+            )) : <li className="leading-relaxed">• Relevant data is not available.</li>}
+          </ul>
+        </div>
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold inline-flex items-center gap-1.5">
+            <ShieldAlert size={12} className="text-rose-500" /> Risk Factors
           </p>
           <ul className="mt-1 space-y-1">
             {risks.map((line, idx) => (
@@ -120,53 +203,14 @@ function StructuredAnswer({ schema, summary, intent, dark }) {
         </div>
         <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
           <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold inline-flex items-center gap-1.5">
-            <Target size={12} className="text-emerald-500" /> Investment View
+            <Target size={12} className="text-emerald-500" /> Investment Interpretation
           </p>
-          <p className="mt-1 font-semibold">{investmentView.recommendation}</p>
-          <p className="text-[12px] text-slate-500 mt-0.5">AI Confidence: {investmentView.confidence}%</p>
+          <p className="mt-1 font-semibold">{investmentInterpretation.recommendation}</p>
+          <p className="text-[12px] text-slate-500 mt-0.5">AI Confidence: {investmentInterpretation.confidence}%</p>
+          <p className="text-[12px] mt-1 leading-relaxed">{investmentInterpretation.text || "Relevant data is not available."}</p>
           <p className="text-[12px] mt-1">
-            Forecast: 7D {investmentView?.forecast_horizon?.["7d"] ?? 0}% • 30D {investmentView?.forecast_horizon?.["30d"] ?? 0}% • 90D {investmentView?.forecast_horizon?.["90d"] ?? 0}%
+            Forecast: 7D {formatForecastValue(investmentInterpretation?.forecast_horizon?.["7d"])} • 30D {formatForecastValue(investmentInterpretation?.forecast_horizon?.["30d"])} • 90D {formatForecastValue(investmentInterpretation?.forecast_horizon?.["90d"])}
           </p>
-        </div>
-      </div>
-    );
-  }
-  const isSectorStockPicker = intent === "sector_stock_picker" || schema.intent === "sector_stock_picker";
-  if (isSectorStockPicker) {
-    const picker = schema?.sector_stock_picker || {};
-    const overview = schema?.sector_overview || {};
-    const sector = picker?.sector || "Sector";
-    const etf = picker?.etf || overview?.etf || "-";
-    const stocks = Array.isArray(picker?.stocks) ? picker.stocks : [];
-    const reasons = stocks.slice(0, 5);
-    const riskText = (Array.isArray(schema?.risks) && schema.risks[0]) || "Sector stocks can remain volatile in weak market regimes.";
-    const fg = overview?.fear_greed_index;
-    const regime = overview?.market_regime || "-";
-    return (
-      <div className="mt-2 space-y-2 text-[13px]">
-        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
-          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Sector Overview</p>
-          <p className="mt-1 font-semibold">{sector} ({etf})</p>
-          <p className="text-[12px] text-slate-500 mt-0.5">
-            Top Stocks: {(overview?.top_stocks_inline || reasons.map((x) => x.symbol)).filter(Boolean).join(" • ") || "-"}
-          </p>
-          <p className="text-[12px] mt-1">
-            Fear & Greed: {fg ?? "-"} ({regime})
-          </p>
-        </div>
-        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
-          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Top Momentum Stocks</p>
-          <ul className="mt-1 space-y-1">
-            {reasons.map((x, idx) => (
-              <li key={`${x.symbol || "S"}-${idx}`} className="leading-relaxed">
-                • {x.name || x.symbol} ({x.symbol}) · {x.price != null ? `$${Number(x.price).toFixed(2)}` : "Price N/A"} · {x.return_3m_pct != null ? `3M ${Number(x.return_3m_pct) >= 0 ? "+" : ""}${Number(x.return_3m_pct).toFixed(2)}%` : "3M N/A"} · {x.momentum || "N/A"}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
-          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Sector Risks</p>
-          <p className="mt-1">{riskText}</p>
         </div>
       </div>
     );
@@ -174,7 +218,6 @@ function StructuredAnswer({ schema, summary, intent, dark }) {
   const rationale = Array.isArray(schema.rationale) ? schema.rationale : Array.isArray(schema.summary_points) ? schema.summary_points : [];
   const risks = Array.isArray(schema.risks) ? schema.risks : [];
   const outlook = schema.actionable_view || schema.stance || "-";
-  const isComparison = intent === "stock_comparison" || schema.intent === "stock_comparison";
   return (
     <div className="mt-2 space-y-2 text-[13px]">
       {summary ? (
@@ -185,15 +228,13 @@ function StructuredAnswer({ schema, summary, intent, dark }) {
       ) : null}
 
       <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
-        <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">{isComparison ? "Quick Verdict" : "Key Drivers"}</p>
+        <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Key Drivers</p>
         <ul className="mt-1 space-y-1">
           {rationale.slice(0, 4).map((line, idx) => (
             <li key={`${line}-${idx}`} className="leading-relaxed">• {line}</li>
           ))}
         </ul>
       </div>
-
-      {isComparison ? <ComparisonBlock schema={schema} dark={dark} /> : null}
 
       <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
         <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Risks</p>
@@ -217,6 +258,9 @@ function StructuredAnswer({ schema, summary, intent, dark }) {
 
 export default function ChatMessage({ message, dark = false }) {
   const isUser = message.role === "user";
+  const structuredLead = !isUser ? getStructuredLead(message.schema, message.intent) : null;
+  const shouldHideFullParagraph = Boolean(structuredLead);
+  const sourceTags = Array.isArray(message?.schema?.source_tags) ? message.schema.source_tags : [];
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
@@ -228,7 +272,11 @@ export default function ChatMessage({ message, dark = false }) {
               : "bg-white text-slate-800 rounded-bl-md border border-slate-200"
         }`}
       >
-        <p className="whitespace-pre-wrap leading-relaxed">{message.text}</p>
+        {shouldHideFullParagraph ? (
+          <p className="whitespace-pre-wrap leading-relaxed font-medium">{structuredLead}</p>
+        ) : (
+          <p className="whitespace-pre-wrap leading-relaxed">{message.text}</p>
+        )}
 
         {!isUser && message.warning ? (
           <div className="mt-2 rounded-lg bg-amber-500/15 border border-amber-400/40 text-amber-200 text-[12px] px-2 py-1 inline-flex items-center gap-1.5">
@@ -238,6 +286,7 @@ export default function ChatMessage({ message, dark = false }) {
         ) : null}
 
         {!isUser ? <StructuredAnswer schema={message.schema} summary={message.summary} intent={message.intent} dark={dark} /> : null}
+        {!isUser ? <SourceTags tags={sourceTags} dark={dark} /> : null}
         {!isUser ? <ChartBlock charts={message.charts} dark={dark} /> : null}
 
         {!isUser ? (

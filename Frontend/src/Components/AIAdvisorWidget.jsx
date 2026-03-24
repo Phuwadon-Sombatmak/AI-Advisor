@@ -8,8 +8,12 @@ import SuggestedPrompts from "./SuggestedPrompts";
 import TypingIndicator from "./TypingIndicator";
 import { formatAssistantResponse, getFollowupPrompts } from "../utils/aiAdvisor";
 
+const AI_ADVISOR_CACHE_TTL_MS = 5 * 60 * 1000;
+const advisorResponseCache = new Map();
+
 const ENDPOINTS = [
   "/api-fastapi/api/ai-advisor",
+  "/api-fastapi/ai-advisor",
 ];
 
 const BASE_PROMPTS = [
@@ -27,7 +31,24 @@ const LOADING_STAGES = [
   "Building investment view...",
 ];
 
+function buildGreetingMessage(greetingText) {
+  return {
+    role: "assistant",
+    text: greetingText,
+    time: now(),
+    confidence: null,
+    sources: [],
+    followups: BASE_PROMPTS.slice(0, 3),
+    intent: "unclear_query",
+  };
+}
+
 async function askAI(payload) {
+  const cacheKey = JSON.stringify(payload);
+  const cached = advisorResponseCache.get(cacheKey);
+  if (cached && Date.now() - Number(cached.ts || 0) < AI_ADVISOR_CACHE_TTL_MS) {
+    return cached.data;
+  }
   let lastErr;
   for (const endpoint of ENDPOINTS) {
     try {
@@ -37,7 +58,9 @@ async function askAI(payload) {
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.json();
+      const data = await res.json();
+      advisorResponseCache.set(cacheKey, { ts: Date.now(), data });
+      return data;
     } catch (e) {
       lastErr = e;
     }
@@ -51,7 +74,14 @@ function now() {
 }
 
 function extractSymbolFromText(text = "") {
-  const stop = new Set(["IS", "ARE", "WAS", "WERE", "THE", "THIS", "THAT", "A", "AN", "AND", "OR", "VS"]);
+  const stop = new Set([
+    "IS", "ARE", "WAS", "WERE", "THE", "THIS", "THAT", "A", "AN", "AND", "OR", "VS",
+    "SHOW", "TOP", "RISK", "NEWS", "MARKET", "SECTOR", "SECTORS", "STOCK", "STOCKS",
+    "TODAY", "NOW", "BEST", "COMPARE", "WHICH", "WHY", "LEADING", "MOMENTUM", "WITH",
+    "FOR", "ABOUT", "SUMMARIZE", "BULLISH", "BEARISH", "NEUTRAL", "HOW", "DO", "DOES",
+    "TECHNOLOGY", "ENERGY", "FINANCIALS", "HEALTHCARE", "INDUSTRIALS", "STAPLES",
+    "DISCRETIONARY", "XLK", "XLE", "XLF", "XLV", "XLI", "XLP", "XLY",
+  ]);
   const matches = String(text || "").toUpperCase().match(/\b[A-Z]{2,5}(?:[.-][A-Z])?\b/g) || [];
   const found = matches.find((s) => !stop.has(s));
   return found || "";
@@ -76,14 +106,7 @@ export default function AIAdvisorWidget({ context, dark = false }) {
     last_intent: "unclear_query",
   });
   const [messages, setMessages] = useState([
-    {
-      role: "assistant",
-      text: t("aiAdvisorGreeting"),
-      time: now(),
-      confidence: 78,
-      sources: ["Finnhub", "Yahoo Finance", "Market News"],
-      followups: BASE_PROMPTS.slice(0, 3),
-    },
+    buildGreetingMessage(t("aiAdvisorGreeting")),
   ]);
 
   const scrollRef = useRef(null);
@@ -104,11 +127,24 @@ export default function AIAdvisorWidget({ context, dark = false }) {
     return () => clearInterval(timer);
   }, [loading]);
 
+  const latestAssistant = useMemo(
+    () => [...messages].reverse().find((m) => m.role === "assistant"),
+    [messages],
+  );
+  const latestUser = useMemo(
+    () => [...messages].reverse().find((m) => m.role === "user"),
+    [messages],
+  );
+
   const prompts = useMemo(() => {
-    const latestAssistant = [...messages].reverse().find((m) => m.role === "assistant");
-    const dynamic = getFollowupPrompts(latestAssistant?.intent, latestAssistant?.schema, latestAssistant?.followups);
-    return dynamic.length ? dynamic : BASE_PROMPTS;
-  }, [messages]);
+    const dynamic = getFollowupPrompts(latestAssistant?.intent, latestAssistant?.schema, latestAssistant?.followups, sessionContext);
+    const normalizedLatestUser = String(latestUser?.text || "").trim().toLowerCase();
+    const deduped = (dynamic.length ? dynamic : BASE_PROMPTS).filter((prompt, index, arr) => {
+      const normalizedPrompt = String(prompt || "").trim().toLowerCase();
+      return normalizedPrompt && normalizedPrompt !== normalizedLatestUser && arr.findIndex((item) => String(item || "").trim().toLowerCase() === normalizedPrompt) === index;
+    });
+    return deduped.length ? deduped : BASE_PROMPTS.filter((prompt) => String(prompt).trim().toLowerCase() !== normalizedLatestUser);
+  }, [latestAssistant, latestUser, sessionContext]);
 
   const sendQuestion = async (questionText) => {
     const q = String(questionText || input).trim();
@@ -118,15 +154,16 @@ export default function AIAdvisorWidget({ context, dark = false }) {
     setInput("");
     setLoading(true);
     setLoadingStage(LOADING_STAGES[0]);
-    setStatus((prev) => ({ ...prev, message: "Analyzing market data..." }));
+      setStatus((prev) => ({ ...prev, message: "Analyzing market data...", degraded: false }));
 
     try {
+      const parsedQuestionSymbol = extractSymbolFromText(q) || sessionContext.last_symbol || context?.selected_stock || "";
       const payload = {
         question: q,
         context: {
           ...(context || {}),
           chat_state: sessionContext,
-          selected_stock: extractSymbolFromText(q) || sessionContext.last_symbol || context?.selected_stock || "",
+          selected_stock: parsedQuestionSymbol,
         },
       };
       const raw = await askAI(payload);
@@ -137,21 +174,36 @@ export default function AIAdvisorWidget({ context, dark = false }) {
       if (raw?.analysis?.left_symbol) symbols.push(String(raw.analysis.left_symbol).toUpperCase());
       if (raw?.analysis?.right_symbol) symbols.push(String(raw.analysis.right_symbol).toUpperCase());
       if (raw?.analysis?.ticker) symbols.push(String(raw.analysis.ticker).toUpperCase());
+      if (formatted?.schema?.comparison?.left_symbol) symbols.push(String(formatted.schema.comparison.left_symbol).toUpperCase());
+      if (formatted?.schema?.comparison?.right_symbol) symbols.push(String(formatted.schema.comparison.right_symbol).toUpperCase());
+      if (formatted?.schema?.stock_overview?.ticker) symbols.push(String(formatted.schema.stock_overview.ticker).toUpperCase());
       const uniqueSymbols = [...new Set(symbols.filter(Boolean))];
       const symbol = uniqueSymbols[0] || sessionContext.last_symbol;
-      const lastSector = raw?.analysis?.sector || raw?.summary?.trending_sector || sessionContext.last_sector || "";
+      const lastSector =
+        formatted?.schema?.sector_stock_picker?.sector ||
+        formatted?.schema?.sector_analysis?.sector ||
+        raw?.analysis?.sector ||
+        raw?.summary?.trending_sector ||
+        sessionContext.last_sector ||
+        "";
 
-      setSessionContext({
+      const comparisonSymbols = formatted.intent === "stock_comparison"
+        ? uniqueSymbols.slice(0, 3)
+        : [];
+
+      setSessionContext((prev) => ({
         last_symbol: symbol,
-        last_symbols: uniqueSymbols.length ? uniqueSymbols.slice(0, 3) : sessionContext.last_symbols || [],
+        last_symbols: comparisonSymbols.length ? comparisonSymbols : (formatted.intent === "stock_comparison" ? prev.last_symbols || [] : []),
         last_sector: lastSector,
         last_intent: formatted.intent || "unclear_query",
-      });
-      setStatus(raw?.status || {
-        online: true,
-        message: "Connected",
-        live_data_ready: true,
-        market_context_loaded: true,
+      }));
+      setStatus({
+        ...(raw?.status || {
+          online: true,
+          message: "Connected",
+          live_data_ready: true,
+          market_context_loaded: true,
+        }),
       });
 
       setMessages((prev) => [
@@ -163,43 +215,47 @@ export default function AIAdvisorWidget({ context, dark = false }) {
         },
       ]);
     } catch {
+      const fallbackText = "Live data is temporarily unavailable. Unable to verify market data.";
       setStatus({
-        online: false,
-        message: "Fallback mode",
+        online: true,
+        message: "Live data unavailable",
         live_data_ready: false,
-        market_context_loaded: true,
+        market_context_loaded: false,
+        degraded: true,
       });
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          text: "I’m having trouble loading live market data right now. You can still ask for general analysis.",
+          text: fallbackText,
           time: now(),
-          confidence: 32,
-          sources: ["Fallback Assistant"],
-          warning: "Live market feeds unavailable. Response quality may be reduced.",
+          confidence: null,
+          sources: [],
+          warning: "",
           dataValidation: { price_data: false, news_data: false, technical_data: false },
-          followups: BASE_PROMPTS.slice(0, 3),
+          followups: [
+            "Try again in a moment",
+            "Ask about a different stock",
+            "Summarize today’s market sentiment",
+          ],
           intent: "unclear_query",
         },
       ]);
     } finally {
       setLoading(false);
-      setStatus((prev) => ({ ...prev, message: prev.online === false ? "Fallback mode" : "Connected" }));
+      setStatus((prev) => ({ ...prev, message: "Connected" }));
     }
   };
 
   const clearChat = () => {
+    setSessionContext({
+      last_symbol: "",
+      last_symbols: [],
+      last_sector: "",
+      last_intent: "unclear_query",
+    });
     setMessages([
-      {
-        role: "assistant",
-        text: t("aiAdvisorGreeting"),
-        time: now(),
-        confidence: 78,
-        sources: ["Finnhub", "Yahoo Finance", "Market News"],
-        followups: BASE_PROMPTS.slice(0, 3),
-        intent: "unclear_query",
-      },
+      buildGreetingMessage(t("aiAdvisorGreeting")),
     ]);
   };
 
@@ -225,7 +281,12 @@ export default function AIAdvisorWidget({ context, dark = false }) {
       </div>
 
       <div className={`px-3 pt-2 ${dark ? "bg-[#0B1220]" : "bg-white"}`}>
-        <SuggestedPrompts onPick={sendQuestion} prompts={prompts} dark={dark} title="Suggested questions" />
+        <SuggestedPrompts
+          onPick={sendQuestion}
+          prompts={prompts}
+          dark={dark}
+          title="Suggested questions"
+        />
       </div>
 
       <ChatInput

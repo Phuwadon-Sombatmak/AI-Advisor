@@ -24,7 +24,7 @@ function MiniSparkline({ points = [], up = true }) {
   );
 }
 
-export default function StockCard({ symbol, price, change, points, dark }) {
+export default function StockCard({ symbol, price, change, points, dark, actionSlot = null }) {
   const { i18n } = useTranslation();
   const up = change >= 0;
   return (
@@ -32,14 +32,21 @@ export default function StockCard({ symbol, price, change, points, dark }) {
       className={`${dark ? "bg-[#0F172A] border-slate-700 text-slate-100" : "bg-white border-slate-200 text-slate-900"} rounded-2xl border p-4 transition-all hover:-translate-y-1`}
       style={{ boxShadow: "0 10px 25px rgba(0,0,0,0.08)" }}
     >
-      <div className="flex items-start justify-between mb-1">
-        <p className="text-sm font-bold">{symbol}</p>
-        <p className={`text-xs font-bold ${up ? "text-[#22C55E]" : "text-[#EF4444]"}`}>
-          {up ? "+" : ""}
-          {change.toFixed(2)}%
-        </p>
+      <div className="flex items-start justify-between gap-3 mb-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-bold truncate">{symbol}</p>
+            <div className="flex items-center gap-2 shrink-0">
+              <p className={`text-xs font-bold whitespace-nowrap ${up ? "text-[#22C55E]" : "text-[#EF4444]"}`}>
+                {up ? "+" : ""}
+                {change.toFixed(2)}%
+              </p>
+              {actionSlot}
+            </div>
+          </div>
+          <p className="text-lg font-bold mt-2">{formatCurrencyUSD(price, i18n.language)}</p>
+        </div>
       </div>
-      <p className="text-lg font-bold mb-2">{formatCurrencyUSD(price, i18n.language)}</p>
       <MiniSparkline points={points} up={up} />
     </div>
   );

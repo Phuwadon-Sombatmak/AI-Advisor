@@ -1,9 +1,21 @@
 import numpy as np
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
 from sklearn.preprocessing import MinMaxScaler
 
+
+def _load_tensorflow_layers():
+    try:
+        from tensorflow.keras.layers import LSTM, Dense
+        from tensorflow.keras.models import Sequential
+    except ImportError as exc:
+        raise RuntimeError(
+            "TensorFlow is required for the LSTM forecasting module. "
+            "Install optional ML dependencies with "
+            "`python -m pip install -r FastAPIBackend/requirements-ml.txt`."
+        ) from exc
+    return Sequential, LSTM, Dense
+
 def predict_next_price(prices):
+    Sequential, LSTM, Dense = _load_tensorflow_layers()
 
     scaler = MinMaxScaler()
     data = scaler.fit_transform(np.array(prices).reshape(-1,1))

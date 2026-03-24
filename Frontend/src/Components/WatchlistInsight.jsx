@@ -5,15 +5,20 @@ import { useTranslation } from "react-i18next";
 export default function WatchlistInsight({ items = [], dark, bookmarkedNews = [] }) {
   const { t } = useTranslation();
   const topMomentum = [...items].sort((a, b) => Number(b.change || 0) - Number(a.change || 0))[0];
-  const hasBearish = items.some((x) => x.sentiment === "Bearish");
+  const sectors = [...new Set(items.map((x) => String(x.sector || "").trim()).filter(Boolean))];
+  const topAi = [...items]
+    .filter((x) => Number.isFinite(Number(x.aiScore)))
+    .sort((a, b) => Number(b.aiScore || 0) - Number(a.aiScore || 0))[0];
 
   const alertMessage = topMomentum
-    ? `${topMomentum.symbol} momentum increasing with ${topMomentum.change > 0 ? "+" : ""}${Number(topMomentum.change).toFixed(2)}% today.`
-    : "Add stocks to unlock AI watchlist alerts.";
+    ? `${topMomentum.symbol} has the largest daily move in your watchlist at ${topMomentum.change > 0 ? "+" : ""}${Number(topMomentum.change).toFixed(2)}% today.`
+    : t("emptyWatchlist");
 
-  const insightMessage = items.length
-    ? `AI พบสัญญาณเด่นในกลุ่ม ${topMomentum?.sector || "Growth"} และแนะนำติดตามความผันผวนระยะสั้นก่อนเพิ่มน้ำหนักลงทุน`
-    : "ยังไม่มีข้อมูล watchlist สำหรับวิเคราะห์";
+  const insightMessage = !items.length
+    ? t("emptyWatchlist")
+    : topAi
+      ? `${topAi.symbol} currently has the strongest verified AI score in your watchlist. Coverage spans ${sectors.length || 1} sector${(sectors.length || 1) > 1 ? "s" : ""}.`
+      : `Your watchlist currently spans ${sectors.length || 1} sector${(sectors.length || 1) > 1 ? "s" : ""}. AI scoring is still unavailable for some names.`;
 
   return (
     <section className={`${dark ? "bg-[#0F172A] border-slate-700 text-slate-200" : "bg-white border-slate-200 text-slate-800"} rounded-2xl border p-5 shadow-md`}>
@@ -24,7 +29,7 @@ export default function WatchlistInsight({ items = [], dark, bookmarkedNews = []
 
       <p className="text-sm text-slate-500 mb-4">{insightMessage}</p>
 
-      <div className={`rounded-xl p-3 border ${hasBearish ? "bg-rose-50 border-rose-100 text-rose-700" : "bg-emerald-50 border-emerald-100 text-emerald-700"}`}>
+      <div className={`rounded-xl p-3 border ${Number(topMomentum?.change) < 0 ? "bg-rose-50 border-rose-100 text-rose-700" : "bg-emerald-50 border-emerald-100 text-emerald-700"}`}>
         <div className="flex items-center gap-2 font-semibold text-sm">
           <BellRing size={16} />
           {t("aiAlert")}

@@ -134,15 +134,19 @@ function StockdetailContent() {
         <div className="bg-indigo-600 p-8 rounded-[2rem] shadow-xl text-white grid grid-cols-1 md:grid-cols-3 gap-6 text-center">
           <div>
             <p className="text-indigo-200 font-bold text-sm uppercase tracking-wider">AI Recommendation</p>
-            <p className="text-4xl font-black mt-2">{reco.recommendation}</p>
+            <p className="text-4xl font-black mt-2">{reco.recommendation || "Data unavailable"}</p>
           </div>
           <div className="border-y md:border-y-0 md:border-x border-indigo-400/50 py-4 md:py-0">
             <p className="text-indigo-200 font-bold text-sm uppercase tracking-wider">Target Price</p>
-            <p className="text-4xl font-black mt-2">${reco.target_price}</p>
+            <p className="text-4xl font-black mt-2">
+              {Number.isFinite(Number(reco.target_price)) ? `$${Number(reco.target_price).toFixed(2)}` : "Data unavailable"}
+            </p>
           </div>
           <div>
             <p className="text-indigo-200 font-bold text-sm uppercase tracking-wider">AI Confidence</p>
-            <p className="text-4xl font-black mt-2">{Math.round((reco.confidence || 0.85) * 100)}%</p>
+            <p className="text-4xl font-black mt-2">
+              {Number.isFinite(Number(reco.confidence)) ? `${Math.round(Number(reco.confidence) * 100)}%` : "Data unavailable"}
+            </p>
           </div>
         </div>
       )}

@@ -54,8 +54,8 @@ export default function StockChart({ data = [], returnPct = 0, dark = false }) {
 
   return (
     <div className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-100"} p-6 rounded-3xl border shadow-sm`}>
-      <div className="h-[420px]">
-        <ResponsiveContainer width="100%" height="100%">
+      <div className="h-[420px] min-w-0">
+        <ResponsiveContainer width="100%" height={420} minWidth={0} minHeight={420}>
           <ComposedChart data={prepared} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
             <defs>
               <linearGradient id="priceFillPos" x1="0" y1="0" x2="0" y2="1">

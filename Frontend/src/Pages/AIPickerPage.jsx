@@ -9,12 +9,8 @@ import {
 export default function AIPickerPage() {
   const [strategy, setStrategy] = useState('BALANCED');
   const [picks, setPicks] = useState([]);
-    const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
   
-  // ==========================================
-  // Gemini AI States
-  // ==========================================
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
   const [marketInsight, setMarketInsight] = useState('');
   const [insightLoading, setInsightLoading] = useState(false);
   
@@ -55,30 +51,26 @@ export default function AIPickerPage() {
     }
   ];
 
-  // API Call Function
-  const callGeminiAPI = async (prompt, systemInstruction = "", retryCount = 0) => {
-    const delays = [1000, 2000, 4000, 8000, 16000];
-    if (!apiKey) {
-      return "Data unavailable for AI reasoning (missing Gemini API key).";
-    }
+  // Backend AI call: keeps API keys server-side and grounds output on real data pipeline.
+  const callAdvisorAPI = async (question) => {
     try {
-      const payload = { contents: [{ parts: [{ text: prompt }] }] };
-      if (systemInstruction) payload.systemInstruction = { parts: [{ text: systemInstruction }] };
-
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+      const response = await fetch("/api-fastapi/api/ai-advisor", {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          question,
+          context: {
+            watchlist: picks.map((p) => p.symbol),
+            sentiment: null,
+            risk_profile: strategy,
+          },
+        }),
       });
 
-      if (!response.ok) throw new Error('API Request Failed');
+      if (!response.ok) throw new Error('AI API Request Failed');
       const result = await response.json();
-      return result.candidates?.[0]?.content?.parts?.[0]?.text || "ไม่พบข้อมูลวิเคราะห์จาก AI";
+      return result?.answer || "ไม่พบข้อมูลวิเคราะห์จากระบบ";
     } catch {
-      if (retryCount < 5) {
-        await new Promise(resolve => setTimeout(resolve, delays[retryCount]));
-        return callGeminiAPI(prompt, systemInstruction, retryCount + 1);
-      }
       return "ขออภัย ระบบวิเคราะห์ขัดข้องชั่วคราว โปรดลองใหม่อีกครั้ง";
     }
   };
@@ -86,10 +78,7 @@ export default function AIPickerPage() {
   const getMarketSummary = async () => {
     setInsightLoading(true);
     const stratObj = strategies.find(s => s.id === strategy);
-    const text = await callGeminiAPI(
-      `ประเมินภาวะตลาดหุ้นปัจจุบัน สำหรับนักลงทุนสไตล์ ${stratObj.label} ควรเน้นกลุ่มอุตสาหกรรมใด สรุปสั้นๆ 3 ข้อ`,
-      "คุณคือนักวิเคราะห์การลงทุนมืออาชีพ เขียนสรุปให้กระชับ เป็นภาษาไทย"
-    );
+    const text = await callAdvisorAPI(`สรุปภาพรวมตลาดสำหรับนักลงทุนสไตล์ ${stratObj.label} แบบกระชับ`);
     setMarketInsight(text);
     setInsightLoading(false);
   };
@@ -102,10 +91,7 @@ export default function AIPickerPage() {
     setAnalysisId(stock.symbol);
     if (detailedAnalysis[stock.symbol]) return; 
 
-    const text = await callGeminiAPI(
-      `หุ้น ${stock.symbol} ราคา $${stock.latest_price}. วิเคราะห์จุดแข็ง จุดอ่อน ความเหมาะสมกับกลยุทธ์ ${strategy} สั้นๆ 3 บรรทัด`,
-      "คุณคือนักวิเคราะห์หุ้นสาย Technical และ Fundamental ให้คำปรึกษาอย่างเป็นกลาง"
-    );
+    const text = await callAdvisorAPI(`วิเคราะห์หุ้น ${stock.symbol} สำหรับกลยุทธ์ ${strategy} โดยสรุปจุดแข็ง จุดอ่อน ความเสี่ยง และมุมมองการลงทุน`);
     setDetailedAnalysis(prev => ({ ...prev, [stock.symbol]: text }));
   };
 
@@ -113,10 +99,7 @@ export default function AIPickerPage() {
     e.preventDefault();
     if (!customQuestion.trim()) return;
     setChatLoading(true);
-    const text = await callGeminiAPI(
-      `กลยุทธ์: ${strategy}, หุ้นแนะนำ: ${picks.map(p => p.symbol).join(', ')}. คำถาม: ${customQuestion}`,
-      "คุณคือ AI ผู้ช่วยนักลงทุน ตอบสั้นๆ ตรงประเด็น เป็นภาษาไทย"
-    );
+    const text = await callAdvisorAPI(customQuestion);
     setChatResponse(text);
     setChatLoading(false);
   };
@@ -124,12 +107,13 @@ export default function AIPickerPage() {
   const fetchPicks = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch(`http://localhost:8000/ai-picker?strategy=${strategy}&limit=5`);
+      const response = await fetch(`/api-fastapi/ai-picker?strategy=${strategy}&limit=5`);
       if (!response.ok) throw new Error('Network error');
       const data = await response.json();
       setPicks(Array.isArray(data?.items) ? data.items : []);
     } catch {
       setPicks([]);
+    } finally {
       setLoading(false);
     }
   }, [strategy]);
@@ -150,7 +134,7 @@ export default function AIPickerPage() {
           
           <div className="relative z-10">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 text-indigo-600 text-sm font-bold mb-4">
-              <Sparkles size={16} /> Powered by Gemini AI
+              <Sparkles size={16} /> Powered by Live Market AI
             </div>
             <h1 className="text-4xl font-extrabold tracking-tight text-slate-900 flex items-center gap-3">
               <Bot className="w-10 h-10 text-indigo-600" />
@@ -182,7 +166,7 @@ export default function AIPickerPage() {
                 </div>
                 <div>
                   <h4 className="font-bold text-slate-900 text-lg mb-2 flex items-center gap-2">
-                    Market Insight <span className="text-xs font-normal px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full">Gemini Analysis</span>
+                    Market Insight <span className="text-xs font-normal px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full">Data-driven Analysis</span>
                   </h4>
                   <div className="text-slate-600 whitespace-pre-line leading-relaxed">
                     {marketInsight}

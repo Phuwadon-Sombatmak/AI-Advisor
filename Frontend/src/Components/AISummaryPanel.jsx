@@ -55,21 +55,27 @@ export default function AISummaryPanel({ open, onClose, context, dark = false })
 
   const summary = useMemo(() => {
     const s = data?.summary || {};
+    const forecast = s.forecast_horizon && typeof s.forecast_horizon === "object" ? s.forecast_horizon : {};
+    const sources = Array.isArray(data?.sources)
+      ? data.sources
+          .map((source) => String(source || "").trim())
+          .filter(Boolean)
+      : [];
     return {
-      sentiment: s.market_sentiment || "Neutral",
-      fearGreedScore: Number(s.fear_greed_score ?? 50),
-      fearGreedSource: s.fear_greed_source || "InternalModel",
-      topPick: s.top_ai_pick || "NVDA",
-      topPickConfidence: Number(s.top_ai_pick_confidence ?? data?.confidence ?? 70),
-      sector: s.trending_sector || "Semiconductors",
-      sectorMomentum: s.sector_momentum || "Moderate",
-      marketMomentum: Number(s.market_momentum ?? 0),
-      risk: s.risk_outlook || "Medium",
-      forecast: s.forecast_horizon || { "7d": 0, "30d": 0, "90d": 0 },
-      sources: Array.isArray(data?.sources) ? data.sources : ["Finnhub", "Yahoo Finance", "Market News"],
-      explanation: s.explanation || "AI analysis indicates moderate bullish momentum driven by AI infrastructure demand and sector relative strength.",
+      sentiment: s.market_sentiment || null,
+      fearGreedScore: s.fear_greed_score ?? null,
+      fearGreedSource: s.fear_greed_source || null,
+      topPick: s.top_ai_pick || null,
+      topPickConfidence: s.top_ai_pick_confidence ?? null,
+      sector: s.trending_sector || null,
+      sectorMomentum: s.sector_momentum || null,
+      marketMomentum: s.market_momentum ?? null,
+      risk: s.risk_outlook || null,
+      forecast,
+      sources,
+      explanation: s.explanation || t("dataUnavailable"),
     };
-  }, [data]);
+  }, [data, t]);
 
   if (!open) return null;
 
@@ -93,50 +99,54 @@ export default function AISummaryPanel({ open, onClose, context, dark = false })
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-slate-50 border-slate-200"} rounded-xl border p-4`}>
                 <p className="text-xs text-slate-500">{t("marketSentiment")}</p>
-                <p className="text-lg font-bold">{summary.sentiment}</p>
-                <p className="text-sm text-slate-400 mt-1">Fear & Greed: {summary.fearGreedScore.toFixed(1)}</p>
-                <p className="text-xs text-slate-500 mt-1">Source: {summary.fearGreedSource}</p>
+                <p className="text-lg font-bold">{summary.sentiment || t("dataUnavailable")}</p>
+                <p className="text-sm text-slate-400 mt-1">Fear & Greed: {summary.fearGreedScore == null ? t("dataUnavailable") : Number(summary.fearGreedScore).toFixed(1)}</p>
+                {summary.fearGreedSource ? <p className="text-xs text-slate-500 mt-1">Source: {summary.fearGreedSource}</p> : null}
               </div>
               <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-slate-50 border-slate-200"} rounded-xl border p-4`}>
                 <p className="text-xs text-slate-500">{t("topAiPick")}</p>
-                <p className="text-lg font-bold">{summary.topPick}</p>
-                <p className="text-sm text-slate-400 mt-1">AI Confidence: {Math.round(summary.topPickConfidence)}%</p>
+                <p className="text-lg font-bold">{summary.topPick || t("dataUnavailable")}</p>
+                <p className="text-sm text-slate-400 mt-1">AI Confidence: {summary.topPickConfidence == null ? t("dataUnavailable") : `${Math.round(Number(summary.topPickConfidence))}%`}</p>
               </div>
               <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-slate-50 border-slate-200"} rounded-xl border p-4`}>
                 <p className="text-xs text-slate-500">{t("trendingSector")}</p>
-                <p className="text-lg font-bold">{summary.sector}</p>
-                <p className="text-sm text-slate-400 mt-1">Momentum: {summary.sectorMomentum} ({summary.marketMomentum.toFixed(2)}%)</p>
+                <p className="text-lg font-bold">{summary.sector || t("dataUnavailable")}</p>
+                <p className="text-sm text-slate-400 mt-1">
+                  Momentum: {summary.sectorMomentum || t("dataUnavailable")}{summary.marketMomentum == null ? "" : ` (${Number(summary.marketMomentum).toFixed(2)}%)`}
+                </p>
               </div>
               <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-slate-50 border-slate-200"} rounded-xl border p-4`}>
                 <p className="text-xs text-slate-500">{t("riskOutlook")}</p>
-                <p className="text-lg font-bold">{summary.risk}</p>
-                <p className="text-sm text-slate-400 mt-1">Forecast: 7d / 30d / 90d</p>
+                <p className="text-lg font-bold">{summary.risk || t("dataUnavailable")}</p>
+                <p className="text-sm text-slate-400 mt-1">
+                  {Object.keys(summary.forecast).length ? "Forecast: 7d / 30d / 90d" : t("dataUnavailable")}
+                </p>
               </div>
             </div>
 
             <div className="mt-3 grid grid-cols-3 gap-3">
               <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-slate-50 border-slate-200"} rounded-xl border p-3 text-center`}>
                 <p className="text-xs text-slate-500">7 days</p>
-                <p className={`text-lg font-bold ${Number(summary.forecast["7d"] || 0) >= 0 ? "text-emerald-500" : "text-rose-500"}`}>
-                  {Number(summary.forecast["7d"] || 0) >= 0 ? "+" : ""}{Number(summary.forecast["7d"] || 0).toFixed(2)}%
+                <p className={`text-lg font-bold ${Number(summary.forecast["7d"] ?? 0) >= 0 ? "text-emerald-500" : "text-rose-500"}`}>
+                  {summary.forecast["7d"] == null ? t("dataUnavailable") : `${Number(summary.forecast["7d"]) >= 0 ? "+" : ""}${Number(summary.forecast["7d"]).toFixed(2)}%`}
                 </p>
               </div>
               <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-slate-50 border-slate-200"} rounded-xl border p-3 text-center`}>
                 <p className="text-xs text-slate-500">30 days</p>
-                <p className={`text-lg font-bold ${Number(summary.forecast["30d"] || 0) >= 0 ? "text-emerald-500" : "text-rose-500"}`}>
-                  {Number(summary.forecast["30d"] || 0) >= 0 ? "+" : ""}{Number(summary.forecast["30d"] || 0).toFixed(2)}%
+                <p className={`text-lg font-bold ${Number(summary.forecast["30d"] ?? 0) >= 0 ? "text-emerald-500" : "text-rose-500"}`}>
+                  {summary.forecast["30d"] == null ? t("dataUnavailable") : `${Number(summary.forecast["30d"]) >= 0 ? "+" : ""}${Number(summary.forecast["30d"]).toFixed(2)}%`}
                 </p>
               </div>
               <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-slate-50 border-slate-200"} rounded-xl border p-3 text-center`}>
                 <p className="text-xs text-slate-500">90 days</p>
-                <p className={`text-lg font-bold ${Number(summary.forecast["90d"] || 0) >= 0 ? "text-emerald-500" : "text-rose-500"}`}>
-                  {Number(summary.forecast["90d"] || 0) >= 0 ? "+" : ""}{Number(summary.forecast["90d"] || 0).toFixed(2)}%
+                <p className={`text-lg font-bold ${Number(summary.forecast["90d"] ?? 0) >= 0 ? "text-emerald-500" : "text-rose-500"}`}>
+                  {summary.forecast["90d"] == null ? t("dataUnavailable") : `${Number(summary.forecast["90d"]) >= 0 ? "+" : ""}${Number(summary.forecast["90d"]).toFixed(2)}%`}
                 </p>
               </div>
             </div>
 
             <p className="mt-4 text-sm text-slate-600 leading-relaxed">{summary.explanation}</p>
-            <p className="mt-2 text-xs text-slate-500">Sources: {summary.sources.join(" • ")}</p>
+            {summary.sources.length ? <p className="mt-2 text-xs text-slate-500">Sources: {summary.sources.join(" • ")}</p> : null}
           </>
         )}
       </div>

@@ -1,0 +1,218 @@
+{
+  "generated_at": "2026-03-24T05:14:01.274670Z",
+  "summary": {
+    "total": 26,
+    "passed": 26,
+    "failed": 0
+  },
+  "results": [
+    {
+      "test_id": "DATA_PRICE_AAPL",
+      "status": "PASS",
+      "expected": "Price deviation < 0.5% versus live reference",
+      "actual": "App=251.44 Ref=251.49 Source=yfinance.fast_info.last_price",
+      "deviation": "0.02%",
+      "notes": "Latest price parity check against yfinance reference path."
+    },
+    {
+      "test_id": "DATA_PRICE_NVDA",
+      "status": "PASS",
+      "expected": "Price deviation < 0.5% versus live reference",
+      "actual": "App=175.51 Ref=175.64 Source=yfinance.fast_info.last_price",
+      "deviation": "0.07%",
+      "notes": "Latest price parity check against yfinance reference path."
+    },
+    {
+      "test_id": "DATA_PRICE_MSFT",
+      "status": "PASS",
+      "expected": "Price deviation < 0.5% versus live reference",
+      "actual": "App=382.98 Ref=383.00 Source=yfinance.fast_info.last_price",
+      "deviation": "0.01%",
+      "notes": "Latest price parity check against yfinance reference path."
+    },
+    {
+      "test_id": "DATA_RETURN_AAPL",
+      "status": "PASS",
+      "expected": "Total return deviation ≤ ±2 percentage points using adjusted close",
+      "actual": "App=255745.67% Ref=255745.76%",
+      "deviation": "0.10 pts",
+      "notes": "Reference uses adjusted close series and full history (period=max)."
+    },
+    {
+      "test_id": "DATA_RETURN_NVDA",
+      "status": "PASS",
+      "expected": "Total return deviation ≤ ±2 percentage points using adjusted close",
+      "actual": "App=466992.45% Ref=466992.35%",
+      "deviation": "0.09 pts",
+      "notes": "Reference uses adjusted close series and full history (period=max)."
+    },
+    {
+      "test_id": "DATA_TECHNICAL_AAPL",
+      "status": "PASS",
+      "expected": "MA/RSI/MACD values remain internally consistent with recomputation from price history",
+      "actual": "MA50 app/ref=260.88/260.88, MA200 app/ref=246.70/246.70, RSI app/ref=32.09/32.09, MACD app/ref=-4.1076/-4.1076",
+      "deviation": "",
+      "notes": "Tolerance: MA within 1% or $0.50, RSI within 2 points, MACD within 0.5."
+    },
+    {
+      "test_id": "DATA_TECHNICAL_NVDA",
+      "status": "PASS",
+      "expected": "MA/RSI/MACD values remain internally consistent with recomputation from price history",
+      "actual": "MA50 app/ref=184.40/184.40, MA200 app/ref=178.59/178.59, RSI app/ref=44.39/44.39, MACD app/ref=-2.2602/-2.2602",
+      "deviation": "",
+      "notes": "Tolerance: MA within 1% or $0.50, RSI within 2 points, MACD within 0.5."
+    },
+    {
+      "test_id": "DECISION_RECOMMEND_AAPL",
+      "status": "PASS",
+      "expected": "Expected recommendation=Hold",
+      "actual": "Actual=Hold; upside=None, technical=52.61, momentum=27.87, forecast=-2.29",
+      "deviation": "",
+      "notes": "Normalized Hold subtypes to Hold for 5-level decision parity."
+    },
+    {
+      "test_id": "DECISION_RECOMMEND_NVDA",
+      "status": "PASS",
+      "expected": "Expected recommendation=Hold",
+      "actual": "Actual=Hold; upside=None, technical=57.27, momentum=29.51, forecast=-2.22",
+      "deviation": "",
+      "notes": "Normalized Hold subtypes to Hold for 5-level decision parity."
+    },
+    {
+      "test_id": "DECISION_RECOMMEND_TSLA",
+      "status": "PASS",
+      "expected": "Expected recommendation=Hold",
+      "actual": "Actual=Hold; upside=None, technical=53.09, momentum=18.57, forecast=-4.18",
+      "deviation": "",
+      "notes": "Normalized Hold subtypes to Hold for 5-level decision parity."
+    },
+    {
+      "test_id": "DECISION_RECOMMEND_KO",
+      "status": "PASS",
+      "expected": "Expected recommendation=Hold",
+      "actual": "Actual=Hold; upside=None, technical=55.88, momentum=43.91, forecast=1.0",
+      "deviation": "",
+      "notes": "Normalized Hold subtypes to Hold for 5-level decision parity."
+    },
+    {
+      "test_id": "DECISION_RECOMMEND_MSFT",
+      "status": "PASS",
+      "expected": "Expected recommendation=Hold",
+      "actual": "Actual=Hold; upside=None, technical=32.35, momentum=20.25, forecast=-4.34",
+      "deviation": "",
+      "notes": "Normalized Hold subtypes to Hold for 5-level decision parity."
+    },
+    {
+      "test_id": "DECISION_CONFLICT_COVERAGE",
+      "status": "PASS",
+      "expected": "Conflict rule path should be testable when a live payload matches it",
+      "actual": "No current live symbol in the sample set matched the conflict pattern",
+      "deviation": "",
+      "notes": "This is informational coverage, not a logic failure."
+    },
+    {
+      "test_id": "AI_STOCK_QUERY",
+      "status": "PASS",
+      "expected": "AI response includes Overview, Drivers/Rationale, Risks, and Actionable View",
+      "actual": "HTTP 200; direct_answer=True; overview=True; rationale=True; risks=True; actionable=True",
+      "deviation": "",
+      "notes": "Question: Is NVDA still a good investment?"
+    },
+    {
+      "test_id": "AI_SECTOR_QUERY",
+      "status": "PASS",
+      "expected": "AI response includes Overview, Drivers/Rationale, Risks, and Actionable View",
+      "actual": "HTTP 200; direct_answer=True; overview=True; rationale=True; risks=True; actionable=True",
+      "deviation": "",
+      "notes": "Question: Show sector momentum ranking"
+    },
+    {
+      "test_id": "AI_MACRO_QUERY_EN",
+      "status": "PASS",
+      "expected": "AI response includes Overview, Drivers/Rationale, Risks, and Actionable View",
+      "actual": "HTTP 200; direct_answer=True; overview=True; rationale=True; risks=True; actionable=True",
+      "deviation": "",
+      "notes": "Question: Iran war effect on market"
+    },
+    {
+      "test_id": "AI_MACRO_QUERY_TH",
+      "status": "PASS",
+      "expected": "AI response includes Overview, Drivers/Rationale, Risks, and Actionable View",
+      "actual": "HTTP 200; direct_answer=True; overview=True; rationale=True; risks=True; actionable=True",
+      "deviation": "",
+      "notes": "Question: สงครามอิหร่านมีผลอะไรกับตลาดหุ้น"
+    },
+    {
+      "test_id": "INTENT_STOCK_EN",
+      "status": "PASS",
+      "expected": "Intent should map to stock_analysis",
+      "actual": "Detected=stock_analysis; entities=['NVDA']; top_n=None",
+      "deviation": "",
+      "notes": "Question: Is NVDA good?"
+    },
+    {
+      "test_id": "INTENT_SECTOR_EN",
+      "status": "PASS",
+      "expected": "Intent should map to global_market_query",
+      "actual": "Detected=global_market_query; entities=[]; top_n=None",
+      "deviation": "",
+      "notes": "Question: Show sector momentum ranking"
+    },
+    {
+      "test_id": "INTENT_SCANNER_TH",
+      "status": "PASS",
+      "expected": "Intent should map to market_scanner",
+      "actual": "Detected=market_scanner; entities=[]; top_n=None",
+      "deviation": "",
+      "notes": "Question: หุ้นตัวไหนกำลังมาแรง"
+    },
+    {
+      "test_id": "INTENT_RECO_TH",
+      "status": "PASS",
+      "expected": "Intent should map to open_recommendation",
+      "actual": "Detected=open_recommendation; entities=[]; top_n=None",
+      "deviation": "",
+      "notes": "Question: หุ้นตัวไหนดี"
+    },
+    {
+      "test_id": "INTENT_LOW_RISK_TH",
+      "status": "PASS",
+      "expected": "Intent should map to stock_recommendation",
+      "actual": "Detected=stock_recommendation; entities=[]; top_n=None",
+      "deviation": "",
+      "notes": "Question: หุ้นอะไรเสี่ยงต่ำ"
+    },
+    {
+      "test_id": "RESILIENCE_CACHE_FALLBACK",
+      "status": "PASS",
+      "expected": "If live providers fail and cache exists, system should return cached payload without crashing",
+      "actual": "status=cached, source=yfinance, price=101.0",
+      "deviation": "",
+      "notes": "Simulated provider outage with cache available."
+    },
+    {
+      "test_id": "RESILIENCE_ALL_PROVIDERS_FAIL",
+      "status": "PASS",
+      "expected": "If all providers and cache fail, system should return data_unavailable with confidence 0",
+      "actual": "status=data_unavailable, confidence=0",
+      "deviation": "",
+      "notes": "Simulated full provider failure without cache."
+    },
+    {
+      "test_id": "FLOW_CORE_STOCK_ANALYSIS",
+      "status": "PASS",
+      "expected": "Search → Stock → Recommendation → AI Analysis flow should complete without crash",
+      "actual": "prices=200, stock=200, recommend=200, ai=200",
+      "deviation": "",
+      "notes": "Backend API flow equivalent of the main user journey."
+    },
+    {
+      "test_id": "FLOW_LOGIN_NODE",
+      "status": "PASS",
+      "expected": "Optional live login validation can run when credentials are provided",
+      "actual": "Skipped live login check because QA_TEST_EMAIL / QA_TEST_PASSWORD were not set",
+      "deviation": "",
+      "notes": "Set QA_NODE_BASE_URL, QA_TEST_EMAIL, and QA_TEST_PASSWORD to include login in automated flow tests."
+    }
+  ]
+}

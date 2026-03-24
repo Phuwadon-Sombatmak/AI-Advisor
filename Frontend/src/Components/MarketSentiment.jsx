@@ -43,15 +43,15 @@ async function fetchSentiment() {
 
 export default function MarketSentiment({ dark = false }) {
   const { t } = useTranslation();
-  const [score, setScore] = useState(50);
-  const [apiSentiment, setApiSentiment] = useState("Neutral");
+  const [score, setScore] = useState(null);
+  const [apiSentiment, setApiSentiment] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [rawIndicators, setRawIndicators] = useState({
-    momentum: 50,
-    strength: 50,
-    volatility: 50,
-    safeHaven: 50,
+    momentum: null,
+    strength: null,
+    volatility: null,
+    safeHaven: null,
   });
 
   useEffect(() => {
@@ -62,17 +62,27 @@ export default function MarketSentiment({ dark = false }) {
       try {
         const data = await fetchSentiment();
         if (!mounted) return;
-        setScore(Math.max(0, Math.min(100, Number(data.score) || 50)));
-        setApiSentiment(String(data.sentiment || "Neutral"));
+        const nextScore = Number(data.score);
+        setScore(Number.isFinite(nextScore) ? Math.max(0, Math.min(100, nextScore)) : null);
+        setApiSentiment(String(data.sentiment || ""));
         setRawIndicators({
-          momentum: Number(data.indicators?.momentum ?? 50),
-          strength: Number(data.indicators?.strength ?? 50),
-          volatility: Number(data.indicators?.volatility ?? 50),
-          safeHaven: Number(data.indicators?.safeHaven ?? 50),
+          momentum: Number.isFinite(Number(data.indicators?.momentum)) ? Number(data.indicators?.momentum) : null,
+          strength: Number.isFinite(Number(data.indicators?.strength)) ? Number(data.indicators?.strength) : null,
+          volatility: Number.isFinite(Number(data.indicators?.volatility)) ? Number(data.indicators?.volatility) : null,
+          safeHaven: Number.isFinite(Number(data.indicators?.safeHaven)) ? Number(data.indicators?.safeHaven) : null,
         });
+        setError(data.status === "degraded" ? (data.message || t("marketDataUnavailable")) : "");
       } catch {
         if (!mounted) return;
-        setError(t("sentimentFallback"));
+        setScore(null);
+        setApiSentiment("");
+        setRawIndicators({
+          momentum: null,
+          strength: null,
+          volatility: null,
+          safeHaven: null,
+        });
+        setError(t("marketDataUnavailable"));
       } finally {
         if (mounted) setLoading(false);
       }
@@ -85,7 +95,7 @@ export default function MarketSentiment({ dark = false }) {
     };
   }, []);
 
-  const label = sentimentLabel(score);
+  const label = score != null ? sentimentLabel(score) : null;
   const sentimentMap = {
     Fear: t("fearFear"),
     Greed: t("fearGreed"),
@@ -113,12 +123,18 @@ export default function MarketSentiment({ dark = false }) {
           <h3 className={`${dark ? "text-slate-100" : "text-slate-900"} text-2xl font-bold`}>{t("marketSentiment")}</h3>
           <p className="text-slate-500 mt-1">{t("fearGreedIndex")}</p>
           <div className="mt-4">
-            <FearGreedGauge value={score} dark={dark} />
+            {score != null ? (
+              <FearGreedGauge value={score} dark={dark} />
+            ) : (
+              <div className={`${dark ? "bg-slate-900 text-slate-400 border-slate-700" : "bg-slate-50 text-slate-500 border-slate-200"} rounded-2xl border p-8 text-center text-sm font-medium`}>
+                {loading ? t("loadingReco") : t("marketDataUnavailable")}
+              </div>
+            )}
           </div>
           <p className={`${dark ? "text-slate-200" : "text-slate-700"} mt-2 font-semibold`}>
-            {t("sentiment")}: {loading ? t("loadingReco") : sentimentMap[apiSentiment] || sentimentMap[label] || apiSentiment}
+            {t("sentiment")}: {loading ? t("loadingReco") : (sentimentMap[apiSentiment] || (label ? sentimentMap[label] : null) || t("dataUnavailable"))}
           </p>
-          <p className="text-slate-500 mt-1 text-sm">{description}</p>
+          <p className="text-slate-500 mt-1 text-sm">{score != null ? description : t("marketDataUnavailable")}</p>
           {error ? <p className="text-xs text-amber-600 mt-2">{error}</p> : null}
         </div>
 

@@ -5,7 +5,9 @@ function Card({ title, value, dark }) {
   return (
     <div className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-200"} rounded-2xl border p-5 shadow-md transition-all hover:shadow-lg`}>
       <p className="text-sm text-slate-500 font-medium">{title}</p>
-      <p className={`${dark ? "text-slate-100" : "text-slate-900"} mt-2 text-2xl font-bold`}>{value}</p>
+      <p className={`${dark ? "text-slate-100" : "text-slate-900"} mt-2 text-2xl font-bold`}>
+        {value === null || value === undefined || value === "" || value === "-" ? "Data unavailable" : value}
+      </p>
     </div>
   );
 }

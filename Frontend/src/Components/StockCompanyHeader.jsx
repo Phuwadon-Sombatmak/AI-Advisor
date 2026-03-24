@@ -1,5 +1,5 @@
 import React from "react";
-import { Building2, TrendingDown, TrendingUp } from "lucide-react";
+import { Building2, Info, TrendingDown, TrendingUp } from "lucide-react";
 import { formatCurrencyUSD } from "../utils/formatters";
 
 function fmtNum(value, language = "en", digits = 2) {
@@ -18,6 +18,7 @@ export default function StockCompanyHeader({
   dailyChangePct = 0,
   returnPct = 0,
   rangeLabel = "1Y",
+  adjustedReturn = false,
   language = "en",
   dark = false,
 }) {
@@ -28,6 +29,16 @@ export default function StockCompanyHeader({
   const exchange = profile?.exchange || "-";
   const industry = profile?.industry || "-";
   const logo = profile?.logo || null;
+  const normalizedRangeLabel = String(rangeLabel || "1Y").toUpperCase();
+  const rangeBadgeLabel = adjustedReturn
+    ? (language?.startsWith("th") ? "ผลตอบแทนสะสม (ปรับปรุงแล้ว)" : "Total Return (Adj.)")
+    : `${normalizedRangeLabel} Return`;
+  const adjustedTooltip = language?.startsWith("th")
+    ? "รวมผลของการแตกพาร์และเงินปันผล"
+    : "Includes stock splits and dividends";
+  const timeframeNote = adjustedReturn
+    ? (language?.startsWith("th") ? "ตั้งแต่เริ่มมีข้อมูล" : "Since inception")
+    : null;
 
   return (
     <section className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-100"} p-8 rounded-3xl border shadow-sm`}>
@@ -62,10 +73,17 @@ export default function StockCompanyHeader({
             {upToday ? "+" : ""}{fmtNum(changeAbs, language)} ({upToday ? "+" : ""}{fmtNum(dailyChangePct, language)}%)
           </p>
           <div className="mt-2 flex items-center justify-end gap-2">
-            <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${upRange ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
-              {String(rangeLabel || "1Y").toUpperCase()} Return {upRange ? "+" : ""}{fmtNum(returnPct, language)}%
+            <span
+              title={adjustedReturn ? adjustedTooltip : undefined}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${upRange ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}
+            >
+              {rangeBadgeLabel} {upRange ? "+" : ""}{fmtNum(returnPct, language)}%
+              {adjustedReturn ? <Info size={12} /> : null}
             </span>
           </div>
+          {timeframeNote ? (
+            <p className="mt-2 text-xs font-medium text-slate-500">{timeframeNote}</p>
+          ) : null}
         </div>
       </div>
     </section>

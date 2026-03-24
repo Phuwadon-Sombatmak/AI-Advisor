@@ -1,8 +1,22 @@
 import React from "react";
 
-export default function AIInsightCard({ symbol = "N/A", action = "N/A", confidence = null, risk = "N/A", dark }) {
-  const riskClass = risk === "High" ? "bg-rose-100 text-rose-700" : risk === "Low" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700";
-  const confidenceText = Number.isFinite(Number(confidence)) ? `${Number(confidence).toFixed(0)}%` : "N/A";
+export default function AIInsightCard({ symbol = "N/A", action = null, confidence = null, risk = null, dark }) {
+  const riskClass =
+    risk === "High"
+      ? "bg-rose-100 text-rose-700"
+      : risk === "Low"
+        ? "bg-emerald-100 text-emerald-700"
+        : "bg-amber-100 text-amber-700";
+  const hasAction = Boolean(action && action !== "Data unavailable");
+  const confidenceText =
+    confidence === null || confidence === undefined || confidence === ""
+      ? null
+      : Number.isFinite(Number(confidence))
+        ? Number(confidence) > 0
+          ? `${Number(confidence).toFixed(0)}%`
+          : null
+        : null;
+  const hasSummary = Boolean(hasAction || confidenceText || risk);
 
   return (
     <div
@@ -11,12 +25,16 @@ export default function AIInsightCard({ symbol = "N/A", action = "N/A", confiden
     >
       <p className={`${dark ? "text-cyan-300" : "text-cyan-700"} text-xs font-semibold uppercase tracking-wider mb-2`}>AI Recommendation</p>
       <p className={`${dark ? "text-slate-100" : "text-slate-900"} text-xl font-bold mb-4`}>
-        {symbol} <span className="text-[#2563EB]">→ {action}</span>
+        {symbol} <span className="text-[#2563EB]">→ {action || "Data unavailable"}</span>
       </p>
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">Confidence: {confidenceText}</span>
-        <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${riskClass}`}>Risk: {risk}</span>
-      </div>
+      {hasSummary ? (
+        <div className="flex items-center gap-2 flex-wrap">
+          {confidenceText ? <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">Confidence: {confidenceText}</span> : null}
+          {risk ? <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${riskClass}`}>Risk: {risk}</span> : null}
+        </div>
+      ) : (
+        <p className={`${dark ? "text-slate-400" : "text-slate-500"} text-sm`}>Relevant model output is not available yet.</p>
+      )}
     </div>
   );
 }

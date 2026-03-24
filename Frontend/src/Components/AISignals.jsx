@@ -23,9 +23,13 @@ export default function AISignals({ signals = [], dark = false }) {
           <div key={`${s.symbol}-${idx}`} className={`${dark ? "bg-slate-900" : "bg-slate-50"} rounded-xl p-4 flex items-center justify-between gap-3 transition-all hover:-translate-y-[2px]`}>
             <div>
               <p className="font-bold text-[#2563EB]">{s.symbol}</p>
-              <p className="text-sm text-slate-500">{t("confidence")}: {s.confidence}%</p>
+              <p className="text-sm text-slate-500">
+                {t("confidence")}: {s.confidence == null ? t("dataUnavailable") : `${s.confidence}%`}
+              </p>
             </div>
-            <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${SIGNAL_STYLE[s.signal] || "bg-slate-100 text-slate-700"}`}>{s.signal}</span>
+            <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${SIGNAL_STYLE[s.signal] || "bg-slate-100 text-slate-700"}`}>
+              {s.signal || t("dataUnavailable")}
+            </span>
           </div>
         ))}
       </div>

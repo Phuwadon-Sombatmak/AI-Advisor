@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "validate:platform": "python3 qa/validation_runner.py"
+  },
   "dependencies": {
     "express-rate-limit": "^8.2.1",
     "feedparser": "^2.2.10",

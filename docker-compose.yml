@@ -16,9 +16,10 @@ services:
     build: ./Backend
     ports:
       - "5001:5000"                # ใช้ 5000 ให้ตรงกับที่โค้จรัน
-    volumes:
-      - ./Backend:/app
-      - /app/node_modules
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     env_file: ./Backend/.env
     environment:
       - RECAPTCHA_SKIP_VERIFY=true
@@ -30,10 +31,11 @@ services:
     build: ./FastAPIBackend
     ports:
       - "8000:8000"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     env_file: ./FastAPIBackend/.env
-    volumes:
-      - ./FastAPIBackend:/app
-      - ./Backend:/app/Backend:ro
     depends_on:
       db:
         condition: service_healthy

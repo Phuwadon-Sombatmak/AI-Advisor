@@ -68,3 +68,22 @@ class PortfolioPosition(Base):
     purchase_date = Column(String(16), nullable=False)
     created_at = Column(DateTime, default=utcnow, nullable=False)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class AIRecommendationTrade(Base):
+    __tablename__ = "ai_recommendation_trades"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    symbol = Column(String(16), nullable=False, index=True)
+    recommendation = Column(String(32), nullable=False)
+    position = Column(String(8), nullable=False)  # long / short
+    size = Column(Float, nullable=False, default=1.0)
+    entry_price = Column(Float, nullable=False)
+    entry_time = Column(DateTime, default=utcnow, nullable=False, index=True)
+    status = Column(String(16), nullable=False, default="open", index=True)
+    exit_price = Column(Float, nullable=True)
+    exit_time = Column(DateTime, nullable=True, index=True)
+    exit_reason = Column(String(32), nullable=True)
+    realized_pnl = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)

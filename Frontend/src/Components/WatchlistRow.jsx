@@ -42,6 +42,8 @@ const sentimentStyle = {
 export default function WatchlistRow({ item, dark, onRemove, onOpen }) {
   const { t, i18n } = useTranslation();
   const isGain = Number(item.change) >= 0;
+  const hasAiScore = Number.isFinite(Number(item.aiScore));
+  const sentimentKey = String(item.sentiment || "").toLowerCase();
 
   return (
     <tr className={`${dark ? "hover:bg-slate-800/40" : "hover:bg-blue-50/40"} transition-all duration-200 hover:-translate-y-[1px]`}>
@@ -64,15 +66,23 @@ export default function WatchlistRow({ item, dark, onRemove, onOpen }) {
       </td>
       <td className="px-4 py-4">{Number(item.volume || 0).toLocaleString(i18n.language.startsWith("th") ? "th-TH" : "en-US")}</td>
       <td className="px-4 py-4">
-        <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 text-sm font-semibold">
-          <BarChart3 size={14} />
-          {item.aiScore}
-        </div>
+        {hasAiScore ? (
+          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 text-sm font-semibold">
+            <BarChart3 size={14} />
+            {Math.round(Number(item.aiScore))}
+          </div>
+        ) : (
+          <span className="text-sm text-slate-400">{t("dataUnavailable")}</span>
+        )}
       </td>
       <td className="px-4 py-4">
-        <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${sentimentStyle[item.sentiment] || sentimentStyle.Neutral}`}>
-          {t(String(item.sentiment || "Neutral").toLowerCase())}
-        </span>
+        {item.sentiment ? (
+          <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${sentimentStyle[item.sentiment] || sentimentStyle.Neutral}`}>
+            {t(sentimentKey)}
+          </span>
+        ) : (
+          <span className="text-sm text-slate-400">{t("dataUnavailable")}</span>
+        )}
       </td>
       <td className="px-4 py-4">
         <MiniSparkline points={item.points || []} gain={isGain} />

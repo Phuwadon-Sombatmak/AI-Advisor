@@ -28,8 +28,8 @@ export default function PortfolioChart({ data = [], range = "1M", onRangeChange 
         </div>
       </div>
 
-      <div className="h-72">
-        <ResponsiveContainer width="100%" height="100%">
+      <div className="h-72 min-w-0">
+        <ResponsiveContainer width="100%" height={288} minWidth={0} minHeight={288}>
           <AreaChart data={data}>
             <defs>
               <linearGradient id="portfolioGradient" x1="0" y1="0" x2="0" y2="1">

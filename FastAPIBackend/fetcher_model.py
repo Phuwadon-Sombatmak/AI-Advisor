@@ -15,7 +15,10 @@ from models import Stock, Price, News
 def score_text(text):
     return 0
 
-Base.metadata.create_all(bind=engine)
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as e:
+    print(f"Database init skipped in fetcher_model: {e}")
 
 @contextmanager
 def get_db_cm():

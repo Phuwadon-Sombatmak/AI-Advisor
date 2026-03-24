@@ -1,0 +1,70 @@
+{
+  "active": {},
+  "history": [
+    {
+      "id": "data_accuracy",
+      "metric": "data_accuracy",
+      "label": "Data accuracy",
+      "state": "ACTIVE",
+      "severity": "warning",
+      "threshold": 95.0,
+      "value": 30.0,
+      "timestamp": "2026-03-23T17:24:25.342024Z",
+      "triggered_at": "2026-03-23T17:24:25.343696Z",
+      "resolved_at": null,
+      "acknowledged": false,
+      "acknowledged_by": null,
+      "acknowledged_at": null,
+      "muted_until": null
+    },
+    {
+      "id": "data_accuracy",
+      "metric": "data_accuracy",
+      "label": "Data accuracy",
+      "state": "RESOLVED",
+      "severity": "warning",
+      "threshold": 95.0,
+      "value": 100.0,
+      "timestamp": "2026-03-23T17:58:35.178853Z",
+      "triggered_at": "2026-03-23T17:24:25.343696Z",
+      "resolved_at": "2026-03-23T17:58:35.180281Z",
+      "acknowledged": false,
+      "acknowledged_by": null,
+      "acknowledged_at": null,
+      "muted_until": null
+    },
+    {
+      "id": "data_accuracy",
+      "metric": "data_accuracy",
+      "label": "Data accuracy",
+      "state": "ACTIVE",
+      "severity": "warning",
+      "threshold": 95.0,
+      "value": 12.5,
+      "timestamp": "2026-03-24T04:48:29.494279Z",
+      "triggered_at": "2026-03-24T04:48:29.505034Z",
+      "resolved_at": null,
+      "acknowledged": false,
+      "acknowledged_by": null,
+      "acknowledged_at": null,
+      "muted_until": null
+    },
+    {
+      "id": "data_accuracy",
+      "metric": "data_accuracy",
+      "label": "Data accuracy",
+      "state": "RESOLVED",
+      "severity": "warning",
+      "threshold": 95.0,
+      "value": 99.9,
+      "timestamp": "2026-03-24T05:14:01.274670Z",
+      "triggered_at": "2026-03-24T04:48:29.505034Z",
+      "resolved_at": "2026-03-24T05:14:01.275930Z",
+      "acknowledged": false,
+      "acknowledged_by": null,
+      "acknowledged_at": null,
+      "muted_until": null
+    }
+  ],
+  "updated_at": "2026-03-24T05:51:58.219769Z"
+}

@@ -17,14 +17,25 @@ const toSentiment = (score) => {
   return "neutral";
 };
 
+const toSentimentScore = (item) => {
+  const raw = item?.sentiment_score ?? item?.score ?? item?.sentimentScore;
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric)) return numeric;
+
+  const text = String(item?.sentiment || item?.sentimentLabel || "").toLowerCase();
+  if (text.includes("positive") || text.includes("bull")) return 0.55;
+  if (text.includes("negative") || text.includes("bear")) return -0.55;
+  if (text.includes("neutral")) return 0;
+  return 0;
+};
+
 export default function NewsSentimentFilter({ items = [], dark = false, loading = false }) {
   const { t, i18n } = useTranslation();
   const [filter, setFilter] = useState("all");
 
   const normalized = useMemo(() => {
     return items.map((item, idx) => {
-      const scoreRaw = item.sentiment_score ?? item.score ?? item.sentimentScore ?? 0;
-      const score = Number.isFinite(Number(scoreRaw)) ? Number(scoreRaw) : 0;
+      const score = toSentimentScore(item);
       const dateRaw = item.date || item.published_at || item.published || item.pubDate;
       const displayDate = dateRaw
         ? formatDateByLang(dateRaw, i18n.language)

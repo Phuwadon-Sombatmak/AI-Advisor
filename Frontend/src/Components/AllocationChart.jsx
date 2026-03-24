@@ -10,8 +10,8 @@ export default function AllocationChart({ allocation = [], sectorExposure = [], 
   return (
     <section className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-200"} rounded-2xl border p-5 shadow-md space-y-5`}>
       <h3 className={`${dark ? "text-slate-100" : "text-slate-900"} text-xl font-bold`}>{t("portfolioAllocation")}</h3>
-      <div className="h-64">
-        <ResponsiveContainer width="100%" height="100%">
+      <div className="h-64 min-w-0">
+        <ResponsiveContainer width="100%" height={256} minWidth={0} minHeight={256}>
           <PieChart>
             <Pie data={allocation} cx="50%" cy="50%" innerRadius={60} outerRadius={90} dataKey="value" nameKey="name" stroke="none">
               {allocation.map((entry, index) => (

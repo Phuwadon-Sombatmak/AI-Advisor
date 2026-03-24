@@ -15,6 +15,13 @@ function ScoreBar({ score }) {
   );
 }
 
+const REC_STYLE = {
+  "Strong Buy": "bg-emerald-100 text-emerald-700",
+  Buy: "bg-lime-100 text-lime-700",
+  Hold: "bg-amber-100 text-amber-700",
+  Sell: "bg-rose-100 text-rose-700",
+};
+
 function ConfidenceGauge({ score }) {
   if (!Number.isFinite(score)) {
     return (
@@ -69,9 +76,14 @@ export default function StockPickCard({ stock, dark }) {
       <div className="mt-4 space-y-3 text-sm">
         <ScoreBar score={stock.aiScore} />
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold">Momentum: {stock.momentum}</span>
-          <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-semibold">Risk: {stock.risk}</span>
-          <span className={`px-2 py-1 rounded-full text-xs font-semibold ${sentimentClass}`}>{stock.sentiment}</span>
+          {stock.recommendation ? (
+            <span className={`px-2 py-1 rounded-full text-xs font-semibold ${REC_STYLE[stock.recommendation] || "bg-slate-100 text-slate-700"}`}>
+              {stock.recommendation}
+            </span>
+          ) : null}
+          {stock.momentum ? <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold">Momentum: {stock.momentum}</span> : null}
+          {stock.risk ? <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-semibold">Risk: {stock.risk}</span> : null}
+          {stock.sentiment ? <span className={`px-2 py-1 rounded-full text-xs font-semibold ${sentimentClass}`}>{stock.sentiment}</span> : null}
         </div>
       </div>
     </article>

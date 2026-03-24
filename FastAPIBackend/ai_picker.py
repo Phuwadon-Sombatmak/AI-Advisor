@@ -20,6 +20,48 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+def _recommendation_from_score(score: float) -> str:
+    value = float(score)
+    if value >= 80:
+        return "Strong Buy"
+    if value >= 62:
+        return "Buy"
+    if value >= 40:
+        return "Hold"
+    if value >= 20:
+        return "Sell"
+    return "Strong Sell"
+
+
+def _momentum_label(ret30: float) -> str:
+    value = float(ret30)
+    if value >= 8:
+        return "Strong"
+    if value <= -3:
+        return "Weak"
+    return "Moderate"
+
+
+def _risk_label(volatility: float) -> str:
+    value = float(volatility)
+    if value >= 0.4:
+        return "HIGH"
+    if value >= 0.22:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _sentiment_label(sentiment):
+    if sentiment is None or pd.isna(sentiment):
+        return None
+    value = float(sentiment)
+    if value > 0.2:
+        return "Bullish"
+    if value < -0.2:
+        return "Bearish"
+    return "Neutral"
+
 def get_ai_picks(strategy: str = "BALANCED", limit: int = 5):
     """
     คัดกรองหุ้นด้วย AI โดยอิงจาก Momentum (ผลตอบแทน), Volatility (ความเสี่ยง) และ Sentiment (ข่าว)
@@ -110,9 +152,10 @@ def get_ai_picks(strategy: str = "BALANCED", limit: int = 5):
         price_points = int(len(group))
 
         # Confidence should vary by ticker, based on both data coverage and signal quality.
-        trend_strength = min(1.0, abs(float(ret30)) / 20.0)  # stronger trend => clearer signal
+        # ret30 here is decimal return (e.g. 0.12 = +12%), so scale by realistic move range.
+        trend_strength = min(1.0, abs(float(ret30)) / 0.25)  # 25%+ 3M move => max trend confidence
         sentiment_strength = min(1.0, abs(float(sentiment))) if sentiment is not None else 0.0
-        volatility_quality = 1.0 - min(1.0, float(volatility) / 0.8)  # extreme volatility lowers confidence
+        volatility_quality = 1.0 - min(1.0, float(volatility) / 0.45)  # high realized vol lowers confidence
         history_quality = min(1.0, price_points / 90.0)
         news_quality = min(1.0, news_count / 10.0)
 
@@ -204,18 +247,27 @@ def get_ai_picks(strategy: str = "BALANCED", limit: int = 5):
     # แปลงผลลัพธ์เพื่อส่งกลับไปที่ FastAPI
     results = []
     for _, row in top_picks.iterrows():
+        ai_score = round(row["ai_score"], 2)
+        confidence = round(float(row["confidence"]), 2)
+        ret30 = row["ret30"]
+        volatility = row["volatility"]
+        sentiment = float(row["sentiment"]) if pd.notna(row["sentiment"]) else None
         results.append({
             "ticker": row["ticker"],
             "latest_price": row["latest_price"],
-            "ret30": row["ret30"],
-            "volatility": row["volatility"],
-            "sentiment": row["sentiment"],
-            "ai_score": round(row["ai_score"], 2),
+            "ret30": ret30,
+            "volatility": volatility,
+            "sentiment": sentiment,
+            "ai_score": ai_score,
             "reason": row["reason"],
-            "confidence": round(float(row["confidence"]), 2),
+            "confidence": confidence,
             "signal_coverage": round(float(row["signal_coverage"]), 4),
             "price_points": int(row["price_points"]),
             "news_count": int(row["news_count"]),
+            "recommendation": _recommendation_from_score(ai_score),
+            "momentum_label": _momentum_label(ret30),
+            "risk_level": _risk_label(volatility),
+            "sentiment_label": _sentiment_label(sentiment),
         })
         
     return results

@@ -11,29 +11,36 @@ export function mapConfidenceToBadge(confidence = 0) {
 
 export function buildMarketSummary(summary = {}) {
   if (!summary || typeof summary !== "object") return "";
-  const sentiment = summary.market_sentiment || "Neutral";
+  const sentiment = summary.market_sentiment || "N/A";
   const score = summary.fear_greed_score ?? "-";
-  const sector = summary.trending_sector || "Technology";
-  const risk = summary.risk_outlook || "Medium";
+  const sector = summary.trending_sector || "N/A";
+  const risk = summary.risk_outlook || "N/A";
   return `Market ${sentiment} (${score}) • Sector ${sector} • Risk ${risk}`;
 }
 
-export function getFollowupPrompts(intent = "unclear_query", schema = {}, fallback = []) {
+export function getFollowupPrompts(intent = "unclear_query", schema = {}, fallback = [], chatState = {}) {
   if (Array.isArray(fallback) && fallback.length) return fallback.slice(0, 4);
-  const symbol = schema?.ticker || "";
-  const sector = schema?.sector_stock_picker?.sector || schema?.sector || "";
+  const symbol = schema?.stock_overview?.ticker || schema?.ticker || "";
+  const sector =
+    schema?.sector_stock_picker?.sector ||
+    schema?.sector_analysis?.sector ||
+    schema?.sector_overview?.sector ||
+    schema?.sector ||
+    "";
+  const comparisonPair = Array.isArray(chatState?.last_symbols) ? chatState.last_symbols.filter(Boolean).slice(0, 2) : [];
+  const pairLabel = comparisonPair.length >= 2 ? `${comparisonPair[0]} vs ${comparisonPair[1]}` : "";
   if (intent === "stock_comparison") {
     return [
-      "Show valuation and risk difference",
-      "Which is better for short-term momentum?",
-      "What are the downside risks?",
+      pairLabel ? `Show valuation and risk difference for ${pairLabel}` : "Show valuation and risk difference",
+      pairLabel ? `Which is better for short-term momentum: ${pairLabel}?` : "Which is better for short-term momentum?",
+      pairLabel ? `What are the main downside risks for ${pairLabel}?` : "What are the main downside risks?",
     ];
   }
   if (intent === "single_stock_analysis" && symbol) {
     return [
       `Compare ${symbol} vs AMD`,
       `What are the downside risks for ${symbol}?`,
-      `Show related ideas to ${symbol}`,
+      `What should I watch next for ${symbol}?`,
     ];
   }
   if (intent === "sector_stock_picker") {
@@ -43,25 +50,49 @@ export function getFollowupPrompts(intent = "unclear_query", schema = {}, fallba
       `Which ${sector || "sector"} names have bullish sentiment?`,
     ];
   }
-  if (intent === "sector_explanation") {
+  if (intent === "sector_explanation" || intent === "sector_analysis") {
     return [
       `Show top momentum stocks in ${sector || "this sector"}`,
       `What risks could weaken ${sector || "this sector"}?`,
-      `Is ${sector || "this sector"} still attractive overall?`,
+      `Compare ${sector || "this sector"} vs Technology`,
     ];
   }
-  if (intent === "market_overview" || intent === "risk_explanation") {
+  if (intent === "market_overview") {
     return [
-      "What sectors have strong momentum?",
+      "Which sectors are leading now?",
       "What are the biggest market risks now?",
-      "Show bullish large-cap ideas",
+      "Show top momentum stocks in the strongest sector",
+    ];
+  }
+  if (intent === "trending_stock_discovery") {
+    const names = Array.isArray(schema?.trending_stocks) ? schema.trending_stocks : [];
+    const first = names[0]?.symbol || "";
+    const second = names[1]?.symbol || "";
+    return [
+      first && second ? `Compare ${first} vs ${second}` : "Compare the top trending names",
+      first ? `What are the downside risks for ${first}?` : "What are the downside risks for the top trending stock?",
+      "Which sectors have the strongest momentum now?",
+    ];
+  }
+  if (intent === "risk_explanation") {
+    return [
+      "What is the main market risk right now?",
+      "Which sectors look most defensive now?",
+      "Show stocks with lower downside risk",
     ];
   }
   if (intent === "portfolio_advice") {
     return [
-      "How can I reduce portfolio concentration risk?",
-      "Suggest defensive allocations",
-      "Which holdings are weakest by momentum?",
+      "Where is my concentration risk highest?",
+      "How can I diversify this portfolio?",
+      "Which holdings look weakest right now?",
+    ];
+  }
+  if (pairLabel) {
+    return [
+      `Compare ${pairLabel}`,
+      `What are the downside risks for ${pairLabel}?`,
+      `Which is the stronger setup right now: ${pairLabel}?`,
     ];
   }
   return [

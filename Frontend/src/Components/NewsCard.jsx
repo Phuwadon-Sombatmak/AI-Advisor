@@ -5,6 +5,10 @@ import { getSentimentBadgeClasses, getSentimentConfig, getSentimentScoreClasses,
 
 export default function NewsCard({ news, dark, variant = "grid", isBookmarked = false, onToggleBookmark = () => {} }) {
   const { t } = useTranslation();
+  const handleImageError = (event) => {
+    event.currentTarget.onerror = null;
+    event.currentTarget.style.display = "none";
+  };
   if (variant === "intel") {
     const hasImage = Boolean(news.image);
     const score = typeof news.sentimentScore === "number" ? news.sentimentScore : 0;
@@ -51,7 +55,12 @@ export default function NewsCard({ news, dark, variant = "grid", isBookmarked = 
         </button>
         <div className="flex flex-col sm:flex-row gap-4">
           {hasImage ? (
-            <img src={news.image} alt={news.title || "news"} className="w-full sm:w-40 h-24 rounded-xl object-cover bg-slate-200 shrink-0" />
+            <img
+              src={news.image}
+              alt={news.title || "news"}
+              className="w-full sm:w-40 h-24 rounded-xl object-cover bg-slate-200 shrink-0"
+              onError={handleImageError}
+            />
           ) : (
             <div className="w-full sm:w-40 h-24 rounded-xl bg-slate-100 text-slate-500 text-sm font-semibold grid place-items-center shrink-0">
               {t("noImage")}
@@ -99,7 +108,12 @@ export default function NewsCard({ news, dark, variant = "grid", isBookmarked = 
       >
         <div className="flex flex-col sm:flex-row gap-4">
           {hasImage ? (
-            <img src={news.image} alt={news.title || "news"} className="w-full sm:w-40 h-24 rounded-xl object-cover bg-slate-200 shrink-0" />
+            <img
+              src={news.image}
+              alt={news.title || "news"}
+              className="w-full sm:w-40 h-24 rounded-xl object-cover bg-slate-200 shrink-0"
+              onError={handleImageError}
+            />
           ) : (
             <div className="w-full sm:w-40 h-24 rounded-xl bg-slate-100 text-slate-500 text-sm font-semibold grid place-items-center shrink-0">
               {t("noImage")}
@@ -142,6 +156,7 @@ export default function NewsCard({ news, dark, variant = "grid", isBookmarked = 
           src={news.image || "https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?w=400&h=300&fit=crop"}
           alt={news.title || "news"}
           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+          onError={handleImageError}
         />
       </div>
       <div className="p-4 flex-1">

@@ -56,11 +56,22 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password }),
       });
 
-      const data = await response.json();
+      const rawText = await response.text();
+      let data = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        data = {};
+      }
 
       if (!response.ok) {
         setIsLoading(false);   // ✅ ปิด loading
-        setErrorMessage(data.error || "Invalid email or password");
+        setErrorMessage(
+          data.error ||
+            (response.status >= 500
+              ? "ไม่สามารถเข้าสู่ระบบได้ในขณะนี้"
+              : "Invalid email or password")
+        );
         return;
       }
 
@@ -72,7 +83,7 @@ export default function LoginPage() {
 
     } catch {
       setIsLoading(false);
-      setErrorMessage("Server error");
+      setErrorMessage("ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้");
     }
   };
 
