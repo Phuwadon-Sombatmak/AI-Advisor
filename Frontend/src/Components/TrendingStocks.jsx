@@ -1,5 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
+import { inferAssetMeta } from "../utils/assetMeta";
 
 function Sparkline({ points = [], up = true }) {
   if (!points.length) return null;
@@ -36,12 +37,27 @@ export default function TrendingStocks({ stocks = [], dark = false }) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {stocks.map((s, idx) => (
           <div key={`${s.symbol}-${idx}`} className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-200"} rounded-2xl border p-4 shadow-md transition-all hover:-translate-y-[2px] hover:shadow-lg`}>
+            {(() => {
+              const assetMeta = inferAssetMeta({ symbol: s.symbol });
+              return (
             <div className="flex items-center justify-between">
-              <p className="font-bold text-[#2563EB] text-lg">{s.symbol}</p>
+              <div className="flex items-center gap-2">
+                <p className="font-bold text-[#2563EB] text-lg">{s.symbol}</p>
+                {assetMeta.isEtf ? (
+                  <span
+                    title={assetMeta.assetTypeDescription || undefined}
+                    className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
+                  >
+                    {assetMeta.shortBadgeLabel || "ETF"}
+                  </span>
+                ) : null}
+              </div>
               <span className="text-xs rounded-full px-2 py-1 bg-cyan-100 text-cyan-700 font-bold">
                 {s.aiScore == null ? t("dataUnavailable") : `AI ${s.aiScore}`}
               </span>
             </div>
+              );
+            })()}
             <p className="mt-2 text-sm text-slate-500">{t("momentum")}: {s.momentum || t("dataUnavailable")}</p>
             <p className="text-sm text-slate-500">{t("sentiment")}: {s.sentiment || t("dataUnavailable")}</p>
             <div className="mt-3"><Sparkline points={s.points} up={s.sentiment !== "Bearish"} /></div>

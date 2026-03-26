@@ -1,6 +1,8 @@
 import React from "react";
+import { inferAssetMeta } from "../utils/assetMeta";
 
 export default function AIInsightCard({ symbol = "N/A", action = null, confidence = null, risk = null, dark }) {
+  const assetMeta = inferAssetMeta({ symbol });
   const riskClass =
     risk === "High"
       ? "bg-rose-100 text-rose-700"
@@ -24,9 +26,18 @@ export default function AIInsightCard({ symbol = "N/A", action = null, confidenc
       style={{ boxShadow: "0 10px 25px rgba(0,0,0,0.08)" }}
     >
       <p className={`${dark ? "text-cyan-300" : "text-cyan-700"} text-xs font-semibold uppercase tracking-wider mb-2`}>AI Recommendation</p>
-      <p className={`${dark ? "text-slate-100" : "text-slate-900"} text-xl font-bold mb-4`}>
-        {symbol} <span className="text-[#2563EB]">→ {action || "Data unavailable"}</span>
-      </p>
+      <div className={`${dark ? "text-slate-100" : "text-slate-900"} text-xl font-bold mb-4 flex items-center gap-2 flex-wrap`}>
+        <span>{symbol}</span>
+        {assetMeta.isEtf ? (
+          <span
+            title={assetMeta.assetTypeDescription || undefined}
+            className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
+          >
+            {assetMeta.shortBadgeLabel || "ETF"}
+          </span>
+        ) : null}
+        <span className="text-[#2563EB]">→ {action || "Data unavailable"}</span>
+      </div>
       {hasSummary ? (
         <div className="flex items-center gap-2 flex-wrap">
           {confidenceText ? <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">Confidence: {confidenceText}</span> : null}
