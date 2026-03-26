@@ -44,7 +44,7 @@ export default function StockCard({ symbol, price, change, points, dark, actionS
                   title={assetMeta.assetTypeDescription || undefined}
                   className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
                 >
-                  {assetMeta.shortBadgeLabel || "ETF"}
+                  {assetMeta.badgeLabel || "ETF"}
                 </span>
               ) : null}
             </div>

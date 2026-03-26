@@ -101,7 +101,6 @@ export function inferAssetMeta({ symbol = "", name = "", industry = "", exchange
     assetTypeDescription: isEtf ? (ETF_TYPE_DESCRIPTION_BY_TYPE[assetType] || ETF_TYPE_DESCRIPTION_BY_TYPE.ETF) : null,
     displayName,
     badgeLabel: isEtf ? "ETF" : null,
-    shortBadgeLabel: isEtf ? (assetType?.replace(" ETF", "") || "ETF") : null,
     badgeClass,
   };
 }

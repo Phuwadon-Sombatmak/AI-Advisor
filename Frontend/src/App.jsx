@@ -44,6 +44,7 @@ import AIMarketSummary from "./Components/AIMarketSummary";
 import AISummaryPanel from "./Components/AISummaryPanel";
 import AIAdvisorWidget from "./Components/AIAdvisorWidget";
 import AIInvestmentAnalysis from "./Components/AIInvestmentAnalysis";
+import { inferAssetMeta } from "./utils/assetMeta";
 import { formatCurrencyUSD, formatDateTimeByLang } from "./utils/formatters";
 const ThemeContext = React.createContext({ theme: "light", toggleTheme: () => {} });
 
@@ -2856,7 +2857,13 @@ const WatchlistPage = ({ watchlist = [], onToggleWatchlist = () => {}, onAddWatc
               Number.isFinite(sentimentAvg)
                 ? sentimentFromValue(sentimentAvg)
                 : null;
-            const sector = String(profileJson?.industry || profileJson?.sector || "Unclassified");
+            const assetMeta = inferAssetMeta({
+              symbol: safeSymbol,
+              name: company,
+              industry: profileJson?.industry,
+              exchange: profileJson?.exchange,
+            });
+            const sector = String(profileJson?.industry || profileJson?.sector || assetMeta.assetType || "Unclassified");
 
             return {
               symbol: safeSymbol,
@@ -2889,7 +2896,12 @@ const WatchlistPage = ({ watchlist = [], onToggleWatchlist = () => {}, onAddWatc
 
   const groupedBySector = useMemo(() => {
     const groups = rows.reduce((acc, item) => {
-      const sectorName = String(item?.sector || "Unclassified");
+      const assetMeta = inferAssetMeta({
+        symbol: item?.symbol,
+        name: item?.company,
+        industry: item?.sector,
+      });
+      const sectorName = String(item?.sector || assetMeta.assetType || "Unclassified");
       if (!acc[sectorName]) acc[sectorName] = [];
       acc[sectorName].push(item);
       return acc;
