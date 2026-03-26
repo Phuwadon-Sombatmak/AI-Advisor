@@ -1,7 +1,9 @@
 import React from "react";
-import { inferAssetMeta } from "../utils/assetMeta";
+import { useTranslation } from "react-i18next";
+import { getLocalizedAssetTypeDescription, inferAssetMeta } from "../utils/assetMeta";
 
 export default function AIInsightCard({ symbol = "N/A", action = null, confidence = null, risk = null, dark }) {
+  const { t, i18n } = useTranslation();
   const assetMeta = inferAssetMeta({ symbol });
   const riskClass =
     risk === "High"
@@ -9,7 +11,7 @@ export default function AIInsightCard({ symbol = "N/A", action = null, confidenc
       : risk === "Low"
         ? "bg-emerald-100 text-emerald-700"
         : "bg-amber-100 text-amber-700";
-  const hasAction = Boolean(action && action !== "Data unavailable");
+  const hasAction = Boolean(action && action !== t("dataUnavailable"));
   const confidenceText =
     confidence === null || confidence === undefined || confidence === ""
       ? null
@@ -25,26 +27,26 @@ export default function AIInsightCard({ symbol = "N/A", action = null, confidenc
       className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-200"} rounded-2xl border p-5`}
       style={{ boxShadow: "0 10px 25px rgba(0,0,0,0.08)" }}
     >
-      <p className={`${dark ? "text-cyan-300" : "text-cyan-700"} text-xs font-semibold uppercase tracking-wider mb-2`}>AI Recommendation</p>
+      <p className={`${dark ? "text-cyan-300" : "text-cyan-700"} text-xs font-semibold uppercase tracking-wider mb-2`}>{t("aiRecommendationTitle")}</p>
       <div className={`${dark ? "text-slate-100" : "text-slate-900"} text-xl font-bold mb-4 flex items-center gap-2 flex-wrap`}>
         <span>{symbol}</span>
         {assetMeta.isEtf ? (
           <span
-            title={assetMeta.assetTypeDescription || undefined}
+            title={getLocalizedAssetTypeDescription(assetMeta.assetType, i18n.language) || undefined}
             className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
           >
             {assetMeta.badgeLabel || "ETF"}
           </span>
         ) : null}
-        <span className="text-[#2563EB]">→ {action || "Data unavailable"}</span>
+        <span className="text-[#2563EB]">→ {action || t("dataUnavailable")}</span>
       </div>
       {hasSummary ? (
         <div className="flex items-center gap-2 flex-wrap">
-          {confidenceText ? <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">Confidence: {confidenceText}</span> : null}
-          {risk ? <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${riskClass}`}>Risk: {risk}</span> : null}
+          {confidenceText ? <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">{t("confidence")}: {confidenceText}</span> : null}
+          {risk ? <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${riskClass}`}>{t("riskLevel")}: {risk}</span> : null}
         </div>
       ) : (
-        <p className={`${dark ? "text-slate-400" : "text-slate-500"} text-sm`}>Relevant model output is not available yet.</p>
+        <p className={`${dark ? "text-slate-400" : "text-slate-500"} text-sm`}>{t("relevantModelOutputUnavailable")}</p>
       )}
     </div>
   );

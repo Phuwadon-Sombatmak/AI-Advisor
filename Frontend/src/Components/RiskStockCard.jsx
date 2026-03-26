@@ -1,7 +1,7 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { formatCurrencyUSD } from "../utils/formatters";
-import { inferAssetMeta } from "../utils/assetMeta";
+import { getLocalizedAssetType, getLocalizedAssetTypeDescription, inferAssetMeta } from "../utils/assetMeta";
 
 export default function RiskStockCard({ item, level, dark }) {
   const { t, i18n } = useTranslation();
@@ -29,7 +29,7 @@ export default function RiskStockCard({ item, level, dark }) {
         <p className="text-lg font-bold text-[#2563EB]">{symbol}</p>
         {assetMeta.isEtf ? (
           <span
-            title={assetMeta.assetTypeDescription || undefined}
+            title={getLocalizedAssetTypeDescription(assetMeta.assetType, i18n.language) || undefined}
             className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
           >
             {assetMeta.badgeLabel || "ETF"}
@@ -37,7 +37,7 @@ export default function RiskStockCard({ item, level, dark }) {
         ) : null}
       </div>
       <p className="text-sm text-slate-500">{companyLabel}</p>
-      {assetMeta.isEtf ? <p className="mt-1 text-xs font-semibold text-slate-400">{assetMeta.assetType}</p> : null}
+      {assetMeta.isEtf ? <p className="mt-1 text-xs font-semibold text-slate-400">{getLocalizedAssetType(assetMeta.assetType, i18n.language)}</p> : null}
       <div className="mt-3 flex items-center gap-2 flex-wrap text-xs font-semibold">
         <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700">{t("riskLevel")}: {level}</span>
         {hasRiskScore ? <span className="px-2 py-1 rounded-full bg-cyan-100 text-cyan-700">Risk score: {riskScore.toFixed(2)}</span> : null}

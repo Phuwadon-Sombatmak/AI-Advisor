@@ -3,7 +3,7 @@ import { BarChart3, TrendingDown, TrendingUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import StarButton from "./StarButton";
 import { formatCurrencyUSD } from "../utils/formatters";
-import { inferAssetMeta } from "../utils/assetMeta";
+import { getLocalizedAssetType, getLocalizedAssetTypeDescription, inferAssetMeta } from "../utils/assetMeta";
 
 function MiniSparkline({ points = [], gain = true }) {
   const width = 110;
@@ -62,7 +62,7 @@ export default function WatchlistRow({ item, dark, onRemove, onOpen }) {
           </button>
           {assetMeta.isEtf ? (
             <span
-              title={assetMeta.assetTypeDescription || undefined}
+              title={getLocalizedAssetTypeDescription(assetMeta.assetType, i18n.language) || undefined}
               className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
             >
               {assetMeta.badgeLabel || "ETF"}
@@ -74,7 +74,7 @@ export default function WatchlistRow({ item, dark, onRemove, onOpen }) {
         <div className="min-w-0">
           <div className="truncate">{companyLabel}</div>
           {assetMeta.isEtf ? (
-            <div className="mt-1 text-xs font-semibold text-slate-500">{assetMeta.assetType}</div>
+            <div className="mt-1 text-xs font-semibold text-slate-500">{getLocalizedAssetType(assetMeta.assetType, i18n.language)}</div>
           ) : null}
         </div>
       </td>

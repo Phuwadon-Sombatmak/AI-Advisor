@@ -1,7 +1,7 @@
 import React from "react";
 import { Building2, Info, Layers3, TrendingDown, TrendingUp } from "lucide-react";
 import { formatCurrencyUSD } from "../utils/formatters";
-import { inferAssetMeta } from "../utils/assetMeta";
+import { getLocalizedAssetType, getLocalizedAssetTypeDescription, inferAssetMeta } from "../utils/assetMeta";
 
 function fmtNum(value, language = "en", digits = 2) {
   const n = Number(value || 0);
@@ -34,8 +34,9 @@ export default function StockCompanyHeader({
   const assetType = assetMeta.assetType;
   const isEtf = assetMeta.isEtf;
   const displayName = assetMeta.displayName || name;
+  const localizedAssetType = getLocalizedAssetType(assetType, language);
   const subtitle = isEtf
-    ? `${assetType}${industry && industry !== "-" ? ` • ${industry}` : ""}`
+    ? `${localizedAssetType}${industry && industry !== "-" ? ` • ${industry}` : ""}`
     : industry;
   const normalizedRangeLabel = String(rangeLabel || "1Y").toUpperCase();
   const rangeBadgeLabel = adjustedReturn
@@ -76,7 +77,7 @@ export default function StockCompanyHeader({
               <h1 className={`${dark ? "text-slate-100" : "text-slate-900"} text-3xl font-black truncate`}>{displayName}</h1>
               {isEtf ? (
                 <span
-                  title={assetMeta.assetTypeDescription || undefined}
+                  title={getLocalizedAssetTypeDescription(assetType, language) || undefined}
                   className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-black uppercase tracking-wide cursor-help`}
                 >
                   ETF

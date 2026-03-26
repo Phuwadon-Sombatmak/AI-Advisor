@@ -1,9 +1,9 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { inferAssetMeta } from "../utils/assetMeta";
+import { getLocalizedAssetTypeDescription, inferAssetMeta } from "../utils/assetMeta";
 
 export default function AIMarketSummary({ summary, radar = [], riskAlert, dark = false }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   return (
     <section className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-200"} rounded-2xl border p-5 shadow-md space-y-4`}>
       <h3 className={`${dark ? "text-slate-100" : "text-slate-900"} text-xl font-bold`}>{t("aiMarketSummary")}</h3>
@@ -19,7 +19,7 @@ export default function AIMarketSummary({ summary, radar = [], riskAlert, dark =
                 <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700">{r}</span>
                 {assetMeta.isEtf ? (
                   <span
-                    title={assetMeta.assetTypeDescription || undefined}
+                    title={getLocalizedAssetTypeDescription(assetMeta.assetType, i18n.language) || undefined}
                     className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
                   >
                     {assetMeta.badgeLabel || "ETF"}

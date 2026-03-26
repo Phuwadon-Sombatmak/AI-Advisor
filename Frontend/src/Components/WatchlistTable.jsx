@@ -1,9 +1,10 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import WatchlistRow from "./WatchlistRow";
+import { getLocalizedAssetType } from "../utils/assetMeta";
 
 export default function WatchlistTable({ groups, dark, onRemove, onOpen }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   return (
     <div className="space-y-6">
       {groups.map((group) => (
@@ -12,7 +13,7 @@ export default function WatchlistTable({ groups, dark, onRemove, onOpen }) {
           className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-200"} rounded-2xl border p-4 shadow-md`}
         >
           <div className="flex items-center justify-between mb-3">
-            <h3 className={`${dark ? "text-slate-100" : "text-slate-900"} text-lg font-bold`}>{group.sector}</h3>
+            <h3 className={`${dark ? "text-slate-100" : "text-slate-900"} text-lg font-bold`}>{getLocalizedAssetType(group.sector, i18n.language) || group.sector}</h3>
             <span className="text-xs font-semibold text-slate-500">{group.items.length} {t("stocks")}</span>
           </div>
 

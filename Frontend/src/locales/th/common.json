@@ -229,5 +229,11 @@
   "clearChat": "ล้างแชต",
   "aiAnalyzing": "AI กำลังวิเคราะห์ตลาด...",
   "aiNoAnswer": "ขณะนี้ยังไม่สามารถสร้างคำตอบที่น่าเชื่อถือได้",
-  "riskOutlook": "แนวโน้มความเสี่ยง"
+  "riskOutlook": "แนวโน้มความเสี่ยง",
+  "riskScoreLabel": "คะแนนความเสี่ยง",
+  "return30d": "ผลตอบแทน 30 วัน",
+  "volatility90d": "ความผันผวน 90 วัน",
+  "maxDrawdown1y": "การย่อตัวสูงสุด 1 ปี",
+  "aiRecommendationTitle": "คำแนะนำจาก AI",
+  "relevantModelOutputUnavailable": "ยังไม่มีผลลัพธ์จากโมเดลที่พร้อมใช้งานในขณะนี้"
 }

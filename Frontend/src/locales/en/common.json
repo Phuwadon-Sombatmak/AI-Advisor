@@ -230,5 +230,11 @@
   "clearChat": "Clear Chat",
   "aiAnalyzing": "AI is analyzing the market...",
   "aiNoAnswer": "I could not generate a reliable answer right now.",
-  "riskOutlook": "Risk Outlook"
+  "riskOutlook": "Risk Outlook",
+  "riskScoreLabel": "Risk score",
+  "return30d": "30D Return",
+  "volatility90d": "90D Volatility",
+  "maxDrawdown1y": "1Y Max Drawdown",
+  "aiRecommendationTitle": "AI Recommendation",
+  "relevantModelOutputUnavailable": "Relevant model output is not available yet."
 }

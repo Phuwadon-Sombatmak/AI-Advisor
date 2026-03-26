@@ -5,9 +5,11 @@ import {
   ChevronDown, ChevronUp, Loader2, Send, BarChart3,
   ArrowRight
 } from 'lucide-react';
-import { inferAssetMeta } from '../utils/assetMeta';
+import { getLocalizedAssetType, getLocalizedAssetTypeDescription, inferAssetMeta } from '../utils/assetMeta';
 
 export default function AIPickerPage() {
+  const isThai = typeof document !== "undefined" && document.documentElement.lang?.startsWith("th");
+  const currentLanguage = isThai ? "th" : "en";
   const [strategy, setStrategy] = useState('BALANCED');
   const [picks, setPicks] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -266,7 +268,7 @@ export default function AIPickerPage() {
                           <h3 className="text-3xl font-black text-slate-900">{pick.symbol}</h3>
                           {assetMeta.isEtf ? (
                             <span
-                              title={assetMeta.assetTypeDescription || undefined}
+                              title={getLocalizedAssetTypeDescription(assetMeta.assetType, currentLanguage) || undefined}
                               className={`${assetMeta.badgeClass} inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
                             >
                               {assetMeta.badgeLabel || "ETF"}
@@ -275,7 +277,7 @@ export default function AIPickerPage() {
                         </div>
                         <span className="text-slate-500 font-medium mb-1">{assetMeta.isEtf ? assetMeta.displayName : pick.name}</span>
                         {assetMeta.isEtf ? (
-                          <span className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">{assetMeta.assetType}</span>
+                          <span className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">{getLocalizedAssetType(assetMeta.assetType, currentLanguage)}</span>
                         ) : null}
                       </div>
                       

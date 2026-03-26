@@ -34,15 +34,52 @@ const ETF_NAME_BY_SYMBOL = {
   XLY: "Consumer Discretionary Select Sector SPDR Fund",
 };
 
+const ETF_TYPE_LABELS = {
+  en: {
+    ETF: "ETF",
+    "Commodity ETF": "Commodity ETF",
+    "Index ETF": "Index ETF",
+    "Sector ETF": "Sector ETF",
+  },
+  th: {
+    ETF: "ETF",
+    "Commodity ETF": "ETF สินค้าโภคภัณฑ์",
+    "Index ETF": "ETF ดัชนี",
+    "Sector ETF": "ETF กลุ่มอุตสาหกรรม",
+  },
+};
+
 const ETF_TYPE_DESCRIPTION_BY_TYPE = {
-  ETF: "กองทุนรวมซื้อขายในตลาดหลักทรัพย์",
-  "Commodity ETF": "กองทุนที่อ้างอิงสินค้าโภคภัณฑ์ เช่น ทองคำหรือน้ำมัน",
-  "Index ETF": "กองทุนที่ติดตามดัชนีตลาด เช่น S&P 500 หรือ Nasdaq-100",
-  "Sector ETF": "กองทุนที่ติดตามหุ้นในกลุ่มอุตสาหกรรมเดียวกัน",
+  en: {
+    ETF: "Exchange-traded fund",
+    "Commodity ETF": "Fund tracking commodities such as gold or oil",
+    "Index ETF": "Fund tracking a market index such as the S&P 500 or Nasdaq-100",
+    "Sector ETF": "Fund tracking stocks within the same industry sector",
+  },
+  th: {
+    ETF: "กองทุนรวมซื้อขายในตลาดหลักทรัพย์",
+    "Commodity ETF": "กองทุนที่อ้างอิงสินค้าโภคภัณฑ์ เช่น ทองคำหรือน้ำมัน",
+    "Index ETF": "กองทุนที่ติดตามดัชนีตลาด เช่น S&P 500 หรือ Nasdaq-100",
+    "Sector ETF": "กองทุนที่ติดตามหุ้นในกลุ่มอุตสาหกรรมเดียวกัน",
+  },
 };
 
 function normalizeText(value) {
   return String(value || "").trim();
+}
+
+function languageBucket(language = "en") {
+  return String(language || "en").toLowerCase().startsWith("th") ? "th" : "en";
+}
+
+export function getLocalizedAssetType(assetType, language = "en") {
+  const bucket = languageBucket(language);
+  return ETF_TYPE_LABELS[bucket]?.[assetType] || assetType || null;
+}
+
+export function getLocalizedAssetTypeDescription(assetType, language = "en") {
+  const bucket = languageBucket(language);
+  return ETF_TYPE_DESCRIPTION_BY_TYPE[bucket]?.[assetType] || ETF_TYPE_DESCRIPTION_BY_TYPE[bucket]?.ETF || null;
 }
 
 export function inferAssetMeta({ symbol = "", name = "", industry = "", exchange = "" } = {}) {
@@ -98,7 +135,6 @@ export function inferAssetMeta({ symbol = "", name = "", industry = "", exchange
     symbol: ticker,
     isEtf,
     assetType,
-    assetTypeDescription: isEtf ? (ETF_TYPE_DESCRIPTION_BY_TYPE[assetType] || ETF_TYPE_DESCRIPTION_BY_TYPE.ETF) : null,
     displayName,
     badgeLabel: isEtf ? "ETF" : null,
     badgeClass,

@@ -1,5 +1,6 @@
 import React from "react";
-import { inferAssetMeta } from "../utils/assetMeta";
+import { useTranslation } from "react-i18next";
+import { getLocalizedAssetType, getLocalizedAssetTypeDescription, inferAssetMeta } from "../utils/assetMeta";
 
 function ScoreBar({ score }) {
   const pct = Math.max(0, Math.min(100, score));
@@ -57,6 +58,7 @@ function ConfidenceGauge({ score }) {
 }
 
 export default function StockPickCard({ stock, dark }) {
+  const { i18n } = useTranslation();
   const assetMeta = inferAssetMeta({
     symbol: stock.ticker,
     name: stock.company,
@@ -76,7 +78,7 @@ export default function StockPickCard({ stock, dark }) {
             <h4 className={`${dark ? "text-slate-100" : "text-slate-900"} text-xl font-bold`}>{stock.ticker}</h4>
             {assetMeta.isEtf ? (
               <span
-                title={assetMeta.assetTypeDescription || undefined}
+                title={getLocalizedAssetTypeDescription(assetMeta.assetType, i18n.language) || undefined}
                 className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
               >
                 {assetMeta.badgeLabel || "ETF"}
@@ -84,7 +86,7 @@ export default function StockPickCard({ stock, dark }) {
             ) : null}
           </div>
           <p className="text-sm text-slate-500">{assetMeta.isEtf ? assetMeta.displayName : stock.company}</p>
-          {assetMeta.isEtf ? <p className="text-xs font-semibold text-slate-400 mt-1">{assetMeta.assetType}</p> : null}
+          {assetMeta.isEtf ? <p className="text-xs font-semibold text-slate-400 mt-1">{getLocalizedAssetType(assetMeta.assetType, i18n.language)}</p> : null}
         </div>
         <ConfidenceGauge score={stock.confidence} />
       </div>

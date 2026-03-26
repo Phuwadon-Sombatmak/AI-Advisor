@@ -1,6 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { inferAssetMeta } from "../utils/assetMeta";
+import { getLocalizedAssetTypeDescription, inferAssetMeta } from "../utils/assetMeta";
 
 function Sparkline({ points = [], up = true }) {
   if (!points.length) return null;
@@ -25,7 +25,7 @@ function Sparkline({ points = [], up = true }) {
 }
 
 export default function TrendingStocks({ stocks = [], dark = false }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
 
   if (!stocks.length) {
     return <div className={`${dark ? "bg-[#0F172A] border-slate-700 text-slate-300" : "bg-white border-slate-200 text-slate-500"} rounded-2xl border p-6 shadow-md`}>{t("noAiInsights")}</div>;
@@ -45,7 +45,7 @@ export default function TrendingStocks({ stocks = [], dark = false }) {
                 <p className="font-bold text-[#2563EB] text-lg">{s.symbol}</p>
                 {assetMeta.isEtf ? (
                   <span
-                    title={assetMeta.assetTypeDescription || undefined}
+                    title={getLocalizedAssetTypeDescription(assetMeta.assetType, i18n.language) || undefined}
                     className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
                   >
                     {assetMeta.badgeLabel || "ETF"}
