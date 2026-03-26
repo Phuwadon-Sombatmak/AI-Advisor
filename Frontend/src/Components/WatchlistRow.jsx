@@ -3,6 +3,7 @@ import { BarChart3, TrendingDown, TrendingUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import StarButton from "./StarButton";
 import { formatCurrencyUSD } from "../utils/formatters";
+import { inferAssetMeta } from "../utils/assetMeta";
 
 function MiniSparkline({ points = [], gain = true }) {
   const width = 110;
@@ -44,6 +45,12 @@ export default function WatchlistRow({ item, dark, onRemove, onOpen }) {
   const isGain = Number(item.change) >= 0;
   const hasAiScore = Number.isFinite(Number(item.aiScore));
   const sentimentKey = String(item.sentiment || "").toLowerCase();
+  const assetMeta = inferAssetMeta({
+    symbol: item.symbol,
+    name: item.company,
+    industry: item.sector,
+  });
+  const companyLabel = assetMeta.isEtf ? assetMeta.displayName : item.company;
 
   return (
     <tr className={`${dark ? "hover:bg-slate-800/40" : "hover:bg-blue-50/40"} transition-all duration-200 hover:-translate-y-[1px]`}>
@@ -53,9 +60,24 @@ export default function WatchlistRow({ item, dark, onRemove, onOpen }) {
           <button onClick={() => onOpen(item.symbol)} className="font-bold text-[#2563EB] hover:underline">
             {item.symbol}
           </button>
+          {assetMeta.isEtf ? (
+            <span
+              title={assetMeta.assetTypeDescription || undefined}
+              className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
+            >
+              {assetMeta.shortBadgeLabel || "ETF"}
+            </span>
+          ) : null}
         </div>
       </td>
-      <td className="px-4 py-4 font-medium">{item.company}</td>
+      <td className="px-4 py-4 font-medium">
+        <div className="min-w-0">
+          <div className="truncate">{companyLabel}</div>
+          {assetMeta.isEtf ? (
+            <div className="mt-1 text-xs font-semibold text-slate-500">{assetMeta.assetType}</div>
+          ) : null}
+        </div>
+      </td>
       <td className="px-4 py-4 font-semibold">{formatCurrencyUSD(item.price || 0, i18n.language)}</td>
       <td className={`px-4 py-4 font-semibold ${isGain ? "text-[#22C55E]" : "text-[#EF4444]"}`}>
         <span className="inline-flex items-center gap-1">

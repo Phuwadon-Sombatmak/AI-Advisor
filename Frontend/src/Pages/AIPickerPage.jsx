@@ -5,6 +5,7 @@ import {
   ChevronDown, ChevronUp, Loader2, Send, BarChart3,
   ArrowRight
 } from 'lucide-react';
+import { inferAssetMeta } from '../utils/assetMeta';
 
 export default function AIPickerPage() {
   const [strategy, setStrategy] = useState('BALANCED');
@@ -234,6 +235,13 @@ export default function AIPickerPage() {
             <div className="divide-y divide-slate-100">
               {picks.map((pick, idx) => (
                 <div key={idx} className="hover:bg-slate-50/50 transition-colors">
+                  {(() => {
+                    const assetMeta = inferAssetMeta({
+                      symbol: pick.symbol,
+                      name: pick.name,
+                    });
+
+                    return (
                   <div className="p-8 flex flex-col lg:flex-row items-center gap-6 lg:gap-8">
                     
                     {/* Score Circle */}
@@ -254,8 +262,21 @@ export default function AIPickerPage() {
                     {/* Stock Details */}
                     <div className="flex-1 text-center lg:text-left">
                       <div className="flex flex-col lg:flex-row lg:items-end gap-2 lg:gap-4 mb-3">
-                        <h3 className="text-3xl font-black text-slate-900">{pick.symbol}</h3>
-                        <span className="text-slate-500 font-medium mb-1">{pick.name}</span>
+                        <div className="flex flex-wrap items-center justify-center lg:justify-start gap-2">
+                          <h3 className="text-3xl font-black text-slate-900">{pick.symbol}</h3>
+                          {assetMeta.isEtf ? (
+                            <span
+                              title={assetMeta.assetTypeDescription || undefined}
+                              className={`${assetMeta.badgeClass} inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
+                            >
+                              {assetMeta.shortBadgeLabel || "ETF"}
+                            </span>
+                          ) : null}
+                        </div>
+                        <span className="text-slate-500 font-medium mb-1">{assetMeta.isEtf ? assetMeta.displayName : pick.name}</span>
+                        {assetMeta.isEtf ? (
+                          <span className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">{assetMeta.assetType}</span>
+                        ) : null}
                       </div>
                       
                       <div className="flex flex-wrap items-center justify-center lg:justify-start gap-3">
@@ -292,6 +313,8 @@ export default function AIPickerPage() {
                       </div>
                     </div>
                   </div>
+                    );
+                  })()}
 
                   {/* Deep Analysis Expandable Area */}
                   {analysisId === pick.symbol && (

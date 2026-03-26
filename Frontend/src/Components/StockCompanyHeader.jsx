@@ -1,6 +1,7 @@
 import React from "react";
-import { Building2, Info, TrendingDown, TrendingUp } from "lucide-react";
+import { Building2, Info, Layers3, TrendingDown, TrendingUp } from "lucide-react";
 import { formatCurrencyUSD } from "../utils/formatters";
+import { inferAssetMeta } from "../utils/assetMeta";
 
 function fmtNum(value, language = "en", digits = 2) {
   const n = Number(value || 0);
@@ -29,6 +30,13 @@ export default function StockCompanyHeader({
   const exchange = profile?.exchange || "-";
   const industry = profile?.industry || "-";
   const logo = profile?.logo || null;
+  const assetMeta = inferAssetMeta({ symbol: ticker, name, industry, exchange });
+  const assetType = assetMeta.assetType;
+  const isEtf = assetMeta.isEtf;
+  const displayName = assetMeta.displayName || name;
+  const subtitle = isEtf
+    ? `${assetType}${industry && industry !== "-" ? ` • ${industry}` : ""}`
+    : industry;
   const normalizedRangeLabel = String(rangeLabel || "1Y").toUpperCase();
   const rangeBadgeLabel = adjustedReturn
     ? (language?.startsWith("th") ? "ผลตอบแทนสะสม (ปรับปรุงแล้ว)" : "Total Return (Adj.)")
@@ -57,12 +65,26 @@ export default function StockCompanyHeader({
                 }}
               />
             ) : null}
-            <Building2 data-fallback-logo className={`${logo ? "hidden" : ""} ${dark ? "text-slate-400" : "text-slate-500"}`} size={18} />
+            {isEtf ? (
+              <Layers3 data-fallback-logo className={`${logo ? "hidden" : ""} ${dark ? "text-sky-300" : "text-sky-600"}`} size={18} />
+            ) : (
+              <Building2 data-fallback-logo className={`${logo ? "hidden" : ""} ${dark ? "text-slate-400" : "text-slate-500"}`} size={18} />
+            )}
           </div>
           <div className="min-w-0">
-            <h1 className={`${dark ? "text-slate-100" : "text-slate-900"} text-3xl font-black truncate`}>{name}</h1>
+            <div className="flex items-center gap-2 min-w-0">
+              <h1 className={`${dark ? "text-slate-100" : "text-slate-900"} text-3xl font-black truncate`}>{displayName}</h1>
+              {isEtf ? (
+                <span
+                  title={assetMeta.assetTypeDescription || undefined}
+                  className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-black uppercase tracking-wide cursor-help`}
+                >
+                  ETF
+                </span>
+              ) : null}
+            </div>
             <p className="text-sm text-slate-500 font-semibold mt-1">{ticker} • {exchange}</p>
-            <p className="text-sm text-slate-500 mt-0.5 truncate">{industry}</p>
+            <p className="text-sm text-slate-500 mt-0.5 truncate">{subtitle}</p>
           </div>
         </div>
 

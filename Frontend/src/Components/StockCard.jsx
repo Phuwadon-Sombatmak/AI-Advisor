@@ -1,6 +1,7 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { formatCurrencyUSD } from "../utils/formatters";
+import { inferAssetMeta } from "../utils/assetMeta";
 
 function MiniSparkline({ points = [], up = true }) {
   if (!points.length) return null;
@@ -27,6 +28,7 @@ function MiniSparkline({ points = [], up = true }) {
 export default function StockCard({ symbol, price, change, points, dark, actionSlot = null }) {
   const { i18n } = useTranslation();
   const up = change >= 0;
+  const assetMeta = inferAssetMeta({ symbol });
   return (
     <div
       className={`${dark ? "bg-[#0F172A] border-slate-700 text-slate-100" : "bg-white border-slate-200 text-slate-900"} rounded-2xl border p-4 transition-all hover:-translate-y-1`}
@@ -35,7 +37,17 @@ export default function StockCard({ symbol, price, change, points, dark, actionS
       <div className="flex items-start justify-between gap-3 mb-2">
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-bold truncate">{symbol}</p>
+            <div className="flex min-w-0 items-center gap-2">
+              <p className="text-sm font-bold truncate">{symbol}</p>
+              {assetMeta.isEtf ? (
+                <span
+                  title={assetMeta.assetTypeDescription || undefined}
+                  className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
+                >
+                  {assetMeta.shortBadgeLabel || "ETF"}
+                </span>
+              ) : null}
+            </div>
             <div className="flex items-center gap-2 shrink-0">
               <p className={`text-xs font-bold whitespace-nowrap ${up ? "text-[#22C55E]" : "text-[#EF4444]"}`}>
                 {up ? "+" : ""}
