@@ -35,34 +35,57 @@ export default function TrendingStocks({ stocks = [], dark = false }) {
     <section className="space-y-3">
       <h3 className={`${dark ? "text-slate-100" : "text-slate-900"} text-xl font-bold`}>{t("trendingStocks")}</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {stocks.map((s, idx) => (
-          <div key={`${s.symbol}-${idx}`} className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-200"} rounded-2xl border p-4 shadow-md transition-all hover:-translate-y-[2px] hover:shadow-lg`}>
-            {(() => {
-              const assetMeta = inferAssetMeta({ symbol: s.symbol });
-              return (
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <p className="font-bold text-[#2563EB] text-lg">{s.symbol}</p>
-                {assetMeta.isEtf ? (
-                  <span
-                    title={getLocalizedAssetTypeDescription(assetMeta.assetType, i18n.language) || undefined}
-                    className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
-                  >
-                    {assetMeta.badgeLabel || "ETF"}
-                  </span>
-                ) : null}
+        {stocks.map((s, idx) => {
+          const assetMeta = inferAssetMeta({ symbol: s.symbol });
+          const metricRows = [
+            s.momentum ? { label: t("momentum"), value: s.momentum } : null,
+            s.sentiment ? { label: t("sentiment"), value: s.sentiment } : null,
+          ].filter(Boolean);
+          const showLimitedFallback = metricRows.length === 0;
+
+          return (
+            <div key={`${s.symbol}-${idx}`} className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-200"} rounded-2xl border p-4 shadow-md transition-all hover:-translate-y-[2px] hover:shadow-lg`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <p className="font-bold text-[#2563EB] text-lg">{s.symbol}</p>
+                  {assetMeta.isEtf ? (
+                    <span
+                      title={getLocalizedAssetTypeDescription(assetMeta.assetType, i18n.language) || undefined}
+                      className={`${dark ? "bg-slate-800 text-sky-200 border-sky-400/30" : assetMeta.badgeClass} inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide cursor-help`}
+                    >
+                      {assetMeta.badgeLabel || "ETF"}
+                    </span>
+                  ) : null}
+                </div>
+                <span className="text-xs rounded-full px-2 py-1 bg-cyan-100 text-cyan-700 font-bold">
+                  {s.aiScore == null ? t("dataUnavailable") : `AI ${s.aiScore}`}
+                </span>
               </div>
-              <span className="text-xs rounded-full px-2 py-1 bg-cyan-100 text-cyan-700 font-bold">
-                {s.aiScore == null ? t("dataUnavailable") : `AI ${s.aiScore}`}
-              </span>
+
+              {showLimitedFallback ? (
+                <div className="mt-3">
+                  <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${
+                    dark
+                      ? "border-amber-400/30 bg-amber-500/10 text-amber-200"
+                      : "border-amber-200 bg-amber-50 text-amber-700"
+                  }`}>
+                    Limited data (fallback)
+                  </span>
+                </div>
+              ) : (
+                <div className="mt-2 space-y-1">
+                  {metricRows.map((row) => (
+                    <p key={row.label} className="text-sm text-slate-500">
+                      {row.label}: {row.value}
+                    </p>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-3"><Sparkline points={s.points} up={s.sentiment !== "Bearish"} /></div>
             </div>
-              );
-            })()}
-            <p className="mt-2 text-sm text-slate-500">{t("momentum")}: {s.momentum || t("dataUnavailable")}</p>
-            <p className="text-sm text-slate-500">{t("sentiment")}: {s.sentiment || t("dataUnavailable")}</p>
-            <div className="mt-3"><Sparkline points={s.points} up={s.sentiment !== "Bearish"} /></div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </section>
   );

@@ -17,9 +17,21 @@ class MacroDataGateway:
         sector = (market_context.get("sector_momentum") or {}).get("sector")
         momentum = (market_context.get("sector_momentum") or {}).get("momentum")
         meta = market_context.get("market_meta") or {}
+        regime = market_context.get("regime")
+        confidence = market_context.get("confidence")
+        positioning = market_context.get("positioning") or {
+            "overweight": [],
+            "neutral": [],
+            "underweight": [],
+        }
+        suggested_etfs = market_context.get("suggested_etfs") or []
         return {
             "market_sentiment": market_context.get("market_label"),
             "fear_greed_index": _safe_float(market_context.get("market_score")),
+            "market_regime": regime,
+            "regime_confidence": confidence,
+            "positioning": positioning,
+            "suggested_etfs": suggested_etfs,
             "top_sector": sector,
             "top_sector_momentum": momentum,
             "risk_outlook": market_context.get("risk_outlook"),
@@ -29,4 +41,3 @@ class MacroDataGateway:
             "cpi": _safe_float(meta.get("cpi")),
             "source": meta.get("source") or "Internal Market Context",
         }
-

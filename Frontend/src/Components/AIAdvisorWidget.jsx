@@ -158,12 +158,18 @@ export default function AIAdvisorWidget({ context, dark = false }) {
 
     try {
       const parsedQuestionSymbol = extractSymbolFromText(q) || sessionContext.last_symbol || context?.selected_stock || "";
+      const recentUserHistory = messages
+        .filter((m) => m.role === "user" && String(m.text || "").trim())
+        .slice(-2)
+        .map((m) => String(m.text).trim());
       const payload = {
         question: q,
+        history: recentUserHistory,
         context: {
           ...(context || {}),
           chat_state: sessionContext,
           selected_stock: parsedQuestionSymbol,
+          history: recentUserHistory,
         },
       };
       const raw = await askAI(payload);

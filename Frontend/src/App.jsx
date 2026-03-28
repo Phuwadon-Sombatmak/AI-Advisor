@@ -1467,9 +1467,6 @@ const SearchPage = ({ watchlist = [], onToggleWatchlist = () => {}, recentSearch
         dashboardCards = validCards;
         if (alive) {
           setMiniCards(validCards);
-          if (!highlight && validCards[0]) {
-            setHighlight(deriveDashboardHighlight(validCards[0]));
-          }
         }
       } catch {
         if (alive) setMiniCards([]);
@@ -1489,7 +1486,6 @@ const SearchPage = ({ watchlist = [], onToggleWatchlist = () => {}, recentSearch
             8000
           );
           if (alive) {
-            const fallbackHighlight = deriveDashboardHighlight(dashboardCards.find((item) => item.symbol === topSymbol));
             const usableReco = hasUsableRecommendationData(reco);
             const rawConfidence = reco?.confidence;
             const confidencePct = rawConfidence === null || rawConfidence === undefined || rawConfidence === ""
@@ -1511,21 +1507,13 @@ const SearchPage = ({ watchlist = [], onToggleWatchlist = () => {}, recentSearch
               action,
               confidence: confidencePct,
               risk,
-              available: reco?.available !== false && usableReco && Boolean(action || Number.isFinite(confidencePct) || risk),
+              available: true,
             };
-            setHighlight(
-              liveHighlight.available
-                ? liveHighlight
-                : (fallbackHighlight || (topSymbol ? { symbol: topSymbol, action: null, confidence: null, risk: null, available: false } : null))
-            );
+            setHighlight(usableReco ? liveHighlight : null);
           }
         }
       } catch {
-        if (alive) {
-          const topSymbol = primarySymbols[0];
-          const fallbackHighlight = deriveDashboardHighlight(dashboardCards.find((item) => item.symbol === topSymbol));
-          setHighlight(fallbackHighlight || (topSymbol ? { symbol: topSymbol, action: null, confidence: null, risk: null, available: false } : null));
-        }
+        if (alive) setHighlight(null);
       }
 
       if (alive) {
@@ -3278,21 +3266,43 @@ const AIInsightsPage = ({ watchlist = [], recentSearches = [] }) => {
 
         const summaryData = summaryPayload?.summary || {};
         const pickerItems = Array.isArray(pickerPayload?.items) ? pickerPayload.items : [];
+        const fallbackSymbols = normalizeSymbolList([
+          summaryData?.top_ai_pick,
+          ...(watchlist || []),
+          ...(recentSearches || []),
+        ]).slice(0, 4);
         const topSymbols = normalizeSymbolList(pickerItems.map((item) => item?.ticker)).slice(0, 4);
+        const insightSymbols = topSymbols.length ? topSymbols : fallbackSymbols;
 
         const rankedSectors = Object.entries(summaryData?.sector_performance || {})
           .map(([name, score]) => ({ name, momentum: Math.max(0, Math.min(100, Number(score) || 0)) }))
           .sort((a, b) => b.momentum - a.momentum)
           .slice(0, 6);
 
-        const signalRows = pickerItems
+        let signalRows = pickerItems
           .map((item) => ({
             symbol: String(item?.ticker || "").toUpperCase(),
-            confidence: Number.isFinite(Number(item?.confidence)) ? Math.round(Number(item.confidence)) : null,
+            aiConfidence: Number.isFinite(Number(item?.confidence)) ? Math.round(Number(item.confidence)) : null,
             signal: item?.recommendation || null,
+            dataConfidence: item?.recommendation
+              ? (Number(item?.confidence) >= 70 ? "high" : "medium")
+              : "low",
           }))
-          .filter((item) => item.symbol && (item.signal || item.confidence != null))
+          .filter((item) => item.symbol && (item.signal || item.aiConfidence != null))
           .slice(0, 5);
+
+        if (!signalRows.length && summaryData?.top_ai_pick) {
+          signalRows = [
+            {
+              symbol: String(summaryData.top_ai_pick || "").toUpperCase(),
+              aiConfidence: Number.isFinite(Number(summaryData?.top_ai_pick_confidence))
+                ? Math.round(Number(summaryData.top_ai_pick_confidence))
+                : null,
+              signal: null,
+              dataConfidence: "low",
+            },
+          ].filter((item) => item.symbol && item.aiConfidence != null);
+        }
 
         if (!alive) return;
         const snapshot = {
@@ -3306,7 +3316,7 @@ const AIInsightsPage = ({ watchlist = [], recentSearches = [] }) => {
           sectors: rankedSectors,
           rotation: rankedSectors.slice(0, 2).map((item) => item.name),
           summary: String(summaryData?.explanation || ""),
-          radar: topSymbols.slice(0, 3),
+          radar: insightSymbols.slice(0, 3),
           trending: [],
         };
 
@@ -3315,7 +3325,7 @@ const AIInsightsPage = ({ watchlist = [], recentSearches = [] }) => {
 
         // Fetch trending mini charts in background so overview can render immediately.
         Promise.allSettled(
-          topSymbols.map(async (symbol) => {
+          insightSymbols.map(async (symbol) => {
             const history = await fetchJsonWithRetry(
               [apiUrl(`/api/stock-history?ticker=${symbol}&period=1m`), localFastapiUrl(`/api/stock-history?ticker=${symbol}&period=1m`)],
               1,

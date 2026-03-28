@@ -3,6 +3,7 @@ import { mapConfidenceToBadge } from "../utils/aiAdvisor";
 
 export default function ConfidenceFooter({
   confidence = 0,
+  confidenceSplit = null,
   sources = [],
   updatedAt = "",
   dataCoverage = null,
@@ -25,6 +26,16 @@ export default function ConfidenceFooter({
       : dataCoverage?.technical_data === false || dataCoverage?.technical_signals === false
         ? "limited"
         : "partial";
+  const formatConfidenceLabel = (value, suffix) => {
+    if (!value) return null;
+    const normalized = String(value).trim().toLowerCase();
+    if (!normalized) return null;
+    return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)} ${suffix}`;
+  };
+  const confidenceSummary = [
+    formatConfidenceLabel(confidenceSplit?.data_confidence, "data confidence"),
+    formatConfidenceLabel(confidenceSplit?.reasoning_confidence, "AI confidence"),
+  ].filter(Boolean).join(" • ");
   return (
     <div className={`mt-2 rounded-xl border px-3 py-2 ${
       dark ? "bg-slate-900/80 border-slate-700 text-slate-300" : "bg-slate-50 border-slate-200 text-slate-600"
@@ -36,6 +47,11 @@ export default function ConfidenceFooter({
         <span className="font-semibold">{limitedMode ? "Confidence guide" : "AI Confidence"}: {Math.round(Number(confidence || 0))}%</span>
         {updatedAt ? <span>Last updated: {updatedAt}</span> : null}
       </div>
+      {confidenceSummary ? (
+        <p className="mt-1 text-[11px] font-medium">
+          {confidenceSummary}
+        </p>
+      ) : null}
       {Array.isArray(sources) && sources.length ? (
         <p className="mt-1 text-[11px]">Sources: {sources.join(" · ")}</p>
       ) : null}

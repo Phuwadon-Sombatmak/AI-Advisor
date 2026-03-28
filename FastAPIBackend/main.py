@@ -2222,6 +2222,10 @@ def _qa_alerts_file() -> Path:
     return _qa_results_dir() / "alerts.json"
 
 
+def _qa_regime_history_file() -> Path:
+    return _qa_results_dir() / "regime_history.jsonl"
+
+
 def _safe_json_read(path: Path) -> Any:
     try:
         if not path.exists():
@@ -2249,6 +2253,18 @@ def _safe_jsonl_read(path: Path, limit: int = 30) -> List[Dict[str, Any]]:
     except Exception as exc:
         logger.warning(f"Unable to read JSONL file {path}: {exc}")
         return []
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
 
 
 def _qa_read_alerts() -> Dict[str, Any]:
@@ -2655,8 +2671,28 @@ def prices_batch_endpoint(symbols: str = Query(..., description="Comma-separated
 def market_sentiment_endpoint(force_refresh: bool = Query(False, description="Bypass cache (10m)")):
     if not HAS_MARKET_SENTIMENT:
         return {
+            "sentiment_score": None,
+            "sentiment_label": None,
             "score": None,
             "sentiment": None,
+            "cnn_reference": {
+                "score": None,
+                "divergence": None,
+                "label": None,
+                "fetched_at": None,
+                "endpoint": None,
+            },
+            "cnn_reference_score": None,
+            "cnn_divergence": None,
+            "regime": None,
+            "confidence": None,
+            "regime_interpretation": "Volatility calming does not imply bullish recovery when momentum and breadth remain weak.",
+            "positioning": {
+                "overweight": ["Balanced allocation"],
+                "neutral": ["Healthcare", "Industrials"],
+                "underweight": ["High-beta Growth"],
+            },
+            "suggested_etfs": ["SPY", "XLI"],
             "updated_at": datetime.utcnow().isoformat() + "Z",
             "source": "Unavailable",
             "status": "degraded",
@@ -2673,8 +2709,28 @@ def market_sentiment_endpoint(force_refresh: bool = Query(False, description="By
     except Exception as e:
         logger.error(f"Error in /market-sentiment: {e}")
         return {
+            "sentiment_score": None,
+            "sentiment_label": None,
             "score": None,
             "sentiment": None,
+            "cnn_reference": {
+                "score": None,
+                "divergence": None,
+                "label": None,
+                "fetched_at": None,
+                "endpoint": None,
+            },
+            "cnn_reference_score": None,
+            "cnn_divergence": None,
+            "regime": None,
+            "confidence": None,
+            "regime_interpretation": "Volatility calming does not imply bullish recovery when momentum and breadth remain weak.",
+            "positioning": {
+                "overweight": ["Balanced allocation"],
+                "neutral": ["Healthcare", "Industrials"],
+                "underweight": ["High-beta Growth"],
+            },
+            "suggested_etfs": ["SPY", "XLI"],
             "updated_at": datetime.utcnow().isoformat() + "Z",
             "source": "Unavailable",
             "status": "degraded",
@@ -2688,6 +2744,45 @@ def market_sentiment_endpoint(force_refresh: bool = Query(False, description="By
         }
 
 
+@app.get("/api/market-sentiment/history")
+@app.get("/market-sentiment/history")
+def market_sentiment_history_endpoint(limit: int = Query(100, ge=1, le=1000)):
+    rows = _safe_jsonl_read(_qa_regime_history_file(), limit=limit)
+    distribution: Dict[str, int] = {}
+    confidence_distribution: Dict[str, int] = {}
+    for row in rows:
+        regime = str(row.get("regime") or "unknown")
+        distribution[regime] = int(distribution.get(regime, 0)) + 1
+        confidence = str(row.get("confidence") or "unknown")
+        confidence_distribution[confidence] = int(confidence_distribution.get(confidence, 0)) + 1
+
+    total = len(rows)
+    regime_distribution = [
+        {
+            "regime": regime,
+            "count": count,
+            "share_pct": round((count / total) * 100.0, 2) if total else 0.0,
+        }
+        for regime, count in sorted(distribution.items(), key=lambda item: item[1], reverse=True)
+    ]
+    confidence_breakdown = [
+        {
+            "confidence": confidence,
+            "count": count,
+            "share_pct": round((count / total) * 100.0, 2) if total else 0.0,
+        }
+        for confidence, count in sorted(confidence_distribution.items(), key=lambda item: item[1], reverse=True)
+    ]
+
+    return {
+        "count": total,
+        "items": rows,
+        "regime_distribution": regime_distribution,
+        "confidence_distribution": confidence_breakdown,
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
 class AIAdvisorContext(BaseModel):
     watchlist: List[str] = Field(default_factory=list)
     portfolio: List[Dict[str, Any]] = Field(default_factory=list)
@@ -2696,10 +2791,12 @@ class AIAdvisorContext(BaseModel):
     risk_profile: Optional[str] = None
     selected_stock: Optional[str] = None
     chat_state: Dict[str, Any] = Field(default_factory=dict)
+    history: List[str] = Field(default_factory=list)
 
 
 class AIAdvisorRequest(BaseModel):
     question: str
+    history: List[str] = Field(default_factory=list)
     context: AIAdvisorContext = Field(default_factory=AIAdvisorContext)
 
 
@@ -3165,6 +3262,139 @@ def _aggregate_trade_groups(rows: List[Dict[str, Any]], key_name: str) -> List[D
     return summary
 
 
+def _load_regime_history(limit: int = 5000) -> List[Dict[str, Any]]:
+    rows = _safe_jsonl_read(_qa_regime_history_file(), limit=limit)
+    enriched: List[Dict[str, Any]] = []
+    for row in rows:
+        timestamp = _parse_iso_datetime(row.get("timestamp"))
+        if not timestamp:
+            continue
+        enriched.append({**row, "_dt": timestamp})
+    enriched.sort(key=lambda row: row["_dt"])
+    return enriched
+
+
+def _resolve_regime_snapshot_for_trade(entry_time: Optional[datetime], regime_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    fallback = {
+        "regime": "unknown",
+        "confidence": "low",
+        "timestamp": None,
+        "momentum": None,
+        "strength": None,
+        "volatility": None,
+        "safe_haven": None,
+    }
+    if not entry_time or not regime_rows:
+        return fallback
+
+    target_ts = entry_time.timestamp()
+    nearest = None
+    nearest_delta = None
+    for row in regime_rows:
+        dt = row.get("_dt")
+        if not dt:
+            continue
+        delta = abs(dt.timestamp() - target_ts)
+        if nearest_delta is None or delta < nearest_delta:
+            nearest = row
+            nearest_delta = delta
+
+    if not nearest:
+        return fallback
+
+    return {
+        "regime": str(nearest.get("regime") or "unknown"),
+        "confidence": str(nearest.get("confidence") or "low"),
+        "timestamp": nearest.get("timestamp"),
+        "momentum": nearest.get("momentum"),
+        "strength": nearest.get("strength"),
+        "volatility": nearest.get("volatility"),
+        "safe_haven": nearest.get("safe_haven"),
+    }
+
+
+def _aggregate_regime_signal_performance(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[tuple, List[float]] = defaultdict(list)
+    for row in rows:
+        regime = str(row.get("market_regime") or "unknown")
+        signal = str(row.get("recommendation_group") or "unknown")
+        grouped[(regime, signal)].append(float(row.get("trade_return_pct") or 0.0))
+
+    output: List[Dict[str, Any]] = []
+    for (regime, signal), returns in grouped.items():
+        metrics = _compute_return_risk_metrics(returns)
+        output.append({
+            "regime": regime,
+            "signal": signal,
+            "trades": metrics["trades"],
+            "confidence": metrics["confidence"],
+            "avg_return": metrics["avg_return"],
+            "win_rate": metrics["win_rate"],
+            "std_return": metrics["std_return"],
+            "sharpe": metrics["sharpe"],
+            "sortino": metrics["sortino"],
+            "max_drawdown": metrics["max_drawdown"],
+            "profit_factor": metrics["profit_factor"],
+        })
+    output.sort(key=lambda row: (row["regime"], -safe_float(row.get("avg_return")), -safe_float(row.get("win_rate"))))
+    return output
+
+
+def _build_regime_signal_insights(regime_signal_performance: List[Dict[str, Any]]) -> Dict[str, Any]:
+    by_regime: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for row in regime_signal_performance:
+        by_regime[str(row.get("regime") or "unknown")].append(row)
+
+    best_signal_per_regime: List[Dict[str, Any]] = []
+    worst_signal_per_regime: List[Dict[str, Any]] = []
+    insights: List[str] = []
+    suggested_adaptations: List[str] = []
+
+    for regime, rows in by_regime.items():
+        ordered = sorted(rows, key=lambda item: (safe_float(item.get("avg_return")), safe_float(item.get("win_rate"))), reverse=True)
+        if not ordered:
+            continue
+        best = ordered[0]
+        worst = ordered[-1]
+        best_signal_per_regime.append({
+            "regime": regime,
+            "signal": best.get("signal"),
+            "avg_return": best.get("avg_return"),
+            "win_rate": best.get("win_rate"),
+            "trades": best.get("trades"),
+        })
+        worst_signal_per_regime.append({
+            "regime": regime,
+            "signal": worst.get("signal"),
+            "avg_return": worst.get("avg_return"),
+            "win_rate": worst.get("win_rate"),
+            "trades": worst.get("trades"),
+        })
+
+        if regime == "Risk-Off":
+            if str(worst.get("signal")) in {"BUY", "STRONG BUY"}:
+                insights.append(f"{worst.get('signal')} signals underperform in {regime} regimes.")
+                suggested_adaptations.append("Disable Strong Buy signals during Risk-Off regimes.")
+            if str(best.get("signal")) in {"SELL", "STRONG SELL"}:
+                insights.append(f"{best.get('signal')} signals perform best during {regime} regimes.")
+                suggested_adaptations.append("Increase weight of defensive sectors during Risk-Off.")
+        elif regime == "Risk-On":
+            if str(best.get("signal")) in {"BUY", "STRONG BUY"}:
+                insights.append(f"{best.get('signal')} signals perform best in {regime} environments.")
+                suggested_adaptations.append("Increase allocation to momentum signals during Risk-On.")
+            if str(worst.get("signal")) in {"SELL", "STRONG SELL"}:
+                insights.append(f"{worst.get('signal')} signals lose edge in {regime} environments.")
+        elif regime == "Neutral":
+            insights.append(f"{best.get('signal')} is the most resilient signal in Neutral regimes.")
+
+    return {
+        "best_signal_per_regime": best_signal_per_regime,
+        "worst_signal_per_regime": worst_signal_per_regime,
+        "insights": list(dict.fromkeys(insights)),
+        "suggested_adaptations": list(dict.fromkeys(suggested_adaptations)),
+    }
+
+
 def _compute_trade_window_metrics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     returns = [float(row.get("trade_return_pct") or 0.0) for row in rows]
     metrics = _compute_return_risk_metrics(returns)
@@ -3385,6 +3615,13 @@ def _build_ai_trade_evaluation(rows: List[AIRecommendationTrade]) -> Dict[str, A
             "worst_signals": [],
             "sector_performance": [],
             "market_regime_performance": [],
+            "regime_signal_performance": [],
+            "regime_insights": {
+                "best_signal_per_regime": [],
+                "worst_signal_per_regime": [],
+                "insights": [],
+            },
+            "strategy_adaptation": [],
             "rankings": {
                 "best_signal": None,
                 "worst_regime": None,
@@ -3421,18 +3658,27 @@ def _build_ai_trade_evaluation(rows: List[AIRecommendationTrade]) -> Dict[str, A
             },
         }
 
-    regime_map = _build_spy_regime_map()
+    regime_history = _load_regime_history()
     enriched_rows: List[Dict[str, Any]] = []
     for raw, serialized_row in zip(rows, serialized):
         enriched = dict(serialized_row)
         enriched["recommendation_group"] = _normalize_recommendation_signal(raw.recommendation)
         enriched["sector"] = _get_portfolio_profile(raw.symbol).get("sector") or _sector_for_symbol(raw.symbol)
-        enriched["market_regime"] = _resolve_regime_for_trade(raw.entry_time, regime_map)
+        regime_snapshot = _resolve_regime_snapshot_for_trade(raw.entry_time, regime_history)
+        enriched["market_regime"] = regime_snapshot.get("regime")
+        enriched["market_regime_confidence"] = regime_snapshot.get("confidence")
+        enriched["market_regime_timestamp"] = regime_snapshot.get("timestamp")
+        enriched["market_regime_momentum"] = regime_snapshot.get("momentum")
+        enriched["market_regime_strength"] = regime_snapshot.get("strength")
+        enriched["market_regime_volatility"] = regime_snapshot.get("volatility")
+        enriched["market_regime_safe_haven"] = regime_snapshot.get("safe_haven")
         enriched_rows.append(enriched)
 
     signal_performance = _aggregate_trade_groups(enriched_rows, "recommendation_group")
     sector_performance = _aggregate_trade_groups(enriched_rows, "sector")
     regime_performance = _aggregate_trade_groups(enriched_rows, "market_regime")
+    regime_signal_performance = _aggregate_regime_signal_performance(enriched_rows)
+    regime_signal_insights = _build_regime_signal_insights(regime_signal_performance)
     overall_performance = _compute_trade_window_metrics(enriched_rows)
     rankings = _build_evaluation_rankings(signal_performance, regime_performance)
 
@@ -3452,13 +3698,20 @@ def _build_ai_trade_evaluation(rows: List[AIRecommendationTrade]) -> Dict[str, A
         suggestions.append("Strong Buy signals are underperforming Buy signals. Tighten Strong Buy thresholds or require stronger momentum confirmation.")
     if strong_sell and sell and strong_sell["average_return"] > sell["average_return"]:
         suggestions.append("Strong Sell signals are not outperforming regular Sell calls. Recalibrate bearish escalation logic before labeling a signal Strong Sell.")
-    if bear_regime and bear_regime["average_return"] < 0:
-        suggestions.append("AI trades struggle in bear regimes. Consider reducing position size or requiring stronger confirmation when SPY is below trend.")
-    if bull_regime and bear_regime and (bull_regime["average_return"] - bear_regime["average_return"]) > 5:
+    risk_off_regime = next((row for row in regime_performance if row["label"] == "Risk-Off"), None)
+    risk_on_regime = next((row for row in regime_performance if row["label"] == "Risk-On"), None)
+    if risk_off_regime and risk_off_regime["average_return"] < 0:
+        suggestions.append("AI trades struggle in Risk-Off regimes. Consider reducing position size or requiring stronger confirmation during defensive markets.")
+    if risk_on_regime and risk_off_regime and (risk_on_regime["average_return"] - risk_off_regime["average_return"]) > 5:
         suggestions.append("Performance is regime-sensitive. Add market regime as a sizing overlay so risk stays lower in weak markets.")
+    if bear_regime and bear_regime["average_return"] < 0:
+        suggestions.append("Legacy SPY bear-regime analysis still shows weaker performance. Compare it against the new market regime history for sizing decisions.")
+    if bull_regime and bear_regime and (bull_regime["average_return"] - bear_regime["average_return"]) > 5:
+        suggestions.append("Legacy bull/bear regime spread remains wide. Use the newer regime timeline to refine adaptive signal weighting.")
     if sector_performance:
         weakest_sector = min(sector_performance, key=lambda item: item["average_return"])
         suggestions.append(f"Weakest sector so far is {weakest_sector['label']}. Review sector-specific signal quality and consider stricter filters there.")
+    suggestions.extend(regime_signal_insights.get("suggested_adaptations") or [])
     if not suggestions:
         suggestions = [
             "Signal performance is balanced. Continue collecting trades and review thresholds after a larger sample size.",
@@ -3478,11 +3731,18 @@ def _build_ai_trade_evaluation(rows: List[AIRecommendationTrade]) -> Dict[str, A
         "worst_signals": worst_signals,
         "sector_performance": sector_performance,
         "market_regime_performance": regime_performance,
+        "regime_signal_performance": regime_signal_performance,
+        "regime_insights": {
+            "best_signal_per_regime": regime_signal_insights.get("best_signal_per_regime") or [],
+            "worst_signal_per_regime": regime_signal_insights.get("worst_signal_per_regime") or [],
+            "insights": regime_signal_insights.get("insights") or [],
+        },
+        "strategy_adaptation": regime_signal_insights.get("suggested_adaptations") or [],
         "rankings": rankings,
         "overall_performance": overall_performance,
         "rolling": rolling_metrics["rolling"],
         "trend": rolling_metrics["trend"],
-        "suggested_improvements": suggestions,
+        "suggested_improvements": list(dict.fromkeys(suggestions)),
         "auto_tuning_preview": auto_tuning_preview,
     }
 
@@ -4496,6 +4756,7 @@ def _resolve_intent_with_context(base_intent: str, question: str, context: AIAdv
         return base_intent
     q = (question or "").strip().lower()
     state = context.chat_state or {}
+    history_text = " ".join([str(item or "").strip().lower() for item in (context.history or []) if str(item or "").strip()])
     last_intent = str(state.get("last_intent") or "").strip()
     last_symbol = str(state.get("last_symbol") or "").upper().strip()
     last_symbols = [str(s).upper().strip() for s in (state.get("last_symbols") or []) if str(s).strip()]
@@ -4504,6 +4765,10 @@ def _resolve_intent_with_context(base_intent: str, question: str, context: AIAdv
     why_terms = ["why", "ทำไม", "strong", "weak", "แข็ง", "อ่อน"]
     comparison_ref_terms = ["compare them", "compare both", "them", "both", "คู่นี้", "สองตัว", "เปรียบเทียบคู่นี้"]
     single_ref_terms = ["what about this one", "what about it", "that stock", "this stock", "ตัวนี้", "ตัวนั้น", "หุ้นตัวนี้", "หุ้นตัวนั้น"]
+    macro_history_terms = ["war", "iran", "oil", "inflation", "yield", "rates", "fed", "สงคราม", "อิหร่าน", "น้ำมัน", "เงินเฟ้อ", "ดอกเบี้ย"]
+    sector_target_terms = ["tech", "technology", "energy", "financial", "healthcare", "sector", "หุ้นเทค", "หุ้นเทคโนโลยี", "พลังงาน", "ธนาคาร", "สุขภาพ", "กลุ่ม"]
+    if any(t in history_text for t in macro_history_terms) and any(t in q for t in sector_target_terms):
+        return "macro_analysis"
     if any(t in q for t in picker_terms) and (
         any(t in q for t in sector_ref_terms) or last_intent in {"sector_analysis", "sector_explanation", "sector_stock_picker", "market_overview"}
     ):
@@ -4525,6 +4790,7 @@ def _resolve_intent_with_context(base_intent: str, question: str, context: AIAdv
     if last_intent in {
         "single_stock_analysis",
         "stock_comparison",
+        "macro_analysis",
         "market_overview",
         "sector_analysis",
         "sector_explanation",
@@ -5072,14 +5338,37 @@ def _build_market_snapshot(context: AIAdvisorContext) -> Dict[str, Any]:
     market_score: Optional[float] = None
     market_label = "Unknown"
     market_meta: Dict[str, Any] = {"score": None, "sentiment": market_label}
+    market_regime: Optional[str] = None
+    regime_confidence: Optional[str] = None
+    positioning: Dict[str, List[str]] = {
+        "overweight": [],
+        "neutral": [],
+        "underweight": [],
+    }
+    suggested_etfs: List[str] = []
     try:
         if HAS_MARKET_SENTIMENT:
             sent = compute_market_sentiment(force_refresh=False)
             if isinstance(sent, dict):
                 market_meta = sent
-                raw_score = sent.get("score")
+                raw_score = sent.get("sentiment_score")
+                if raw_score is None:
+                    raw_score = sent.get("score")
                 market_score = float(raw_score) if raw_score is not None else None
-                market_label = str(sent.get("sentiment", _sentiment_label(market_score))) if market_score is not None else str(sent.get("sentiment", "Unknown"))
+                raw_label = sent.get("sentiment_label")
+                if raw_label is None:
+                    raw_label = sent.get("sentiment")
+                market_label = str(raw_label or _sentiment_label(market_score) or "Unknown")
+                market_regime = str(sent.get("regime") or "").strip() or None
+                regime_confidence = str(sent.get("confidence") or "").strip().lower() or None
+                positioning_payload = sent.get("positioning")
+                if isinstance(positioning_payload, dict):
+                    positioning = {
+                        "overweight": list(positioning_payload.get("overweight") or []),
+                        "neutral": list(positioning_payload.get("neutral") or []),
+                        "underweight": list(positioning_payload.get("underweight") or []),
+                    }
+                suggested_etfs = list(sent.get("suggested_etfs") or [])
     except Exception:
         if context.sentiment is not None:
             market_score = float(context.sentiment)
@@ -5095,6 +5384,10 @@ def _build_market_snapshot(context: AIAdvisorContext) -> Dict[str, Any]:
         "market_score": round(market_score, 1) if market_score is not None else None,
         "market_label": market_label,
         "market_meta": market_meta,
+        "regime": market_regime,
+        "confidence": regime_confidence,
+        "positioning": positioning,
+        "suggested_etfs": suggested_etfs,
         "sector_momentum": sector_momentum,
         "risk_outlook": risk_outlook,
     }
@@ -5103,6 +5396,51 @@ def _build_market_snapshot(context: AIAdvisorContext) -> Dict[str, Any]:
 
 def _build_trending_stock_response(context: AIAdvisorContext, market: Dict[str, Any]) -> Dict[str, Any]:
     cache_key = "market-scanner:top-movers"
+
+    sector_trending_fallbacks: Dict[str, List[Dict[str, str]]] = {
+        "Energy": [
+            {"symbol": "XOM", "name": "Exxon Mobil", "role": "energy leader"},
+            {"symbol": "CVX", "name": "Chevron", "role": "oil major"},
+            {"symbol": "SLB", "name": "SLB", "role": "services leader"},
+        ],
+        "Technology": [
+            {"symbol": "NVDA", "name": "NVIDIA", "role": "AI infrastructure leader"},
+            {"symbol": "MSFT", "name": "Microsoft", "role": "software and cloud leader"},
+            {"symbol": "AMD", "name": "AMD", "role": "semiconductor momentum name"},
+        ],
+        "Healthcare": [
+            {"symbol": "LLY", "name": "Eli Lilly", "role": "earnings leader"},
+            {"symbol": "JNJ", "name": "Johnson & Johnson", "role": "defensive quality leader"},
+            {"symbol": "UNH", "name": "UnitedHealth Group", "role": "managed care leader"},
+        ],
+        "Finance": [
+            {"symbol": "JPM", "name": "JPMorgan Chase", "role": "money-center bank leader"},
+            {"symbol": "GS", "name": "Goldman Sachs", "role": "capital markets leader"},
+            {"symbol": "MS", "name": "Morgan Stanley", "role": "brokerage leader"},
+        ],
+        "Utilities": [
+            {"symbol": "NEE", "name": "NextEra Energy", "role": "utilities leader"},
+            {"symbol": "DUK", "name": "Duke Energy", "role": "defensive yield name"},
+            {"symbol": "SO", "name": "Southern Company", "role": "regulated utility leader"},
+        ],
+        "Consumer Staples": [
+            {"symbol": "PG", "name": "Procter & Gamble", "role": "defensive staple leader"},
+            {"symbol": "KO", "name": "Coca-Cola", "role": "global staple compounder"},
+            {"symbol": "PEP", "name": "PepsiCo", "role": "defensive cash-flow name"},
+        ],
+    }
+    etf_decomposition: Dict[str, List[Dict[str, str]]] = {
+        "XLE": sector_trending_fallbacks["Energy"],
+        "XLU": sector_trending_fallbacks["Utilities"],
+        "XLP": sector_trending_fallbacks["Consumer Staples"],
+        "XLV": sector_trending_fallbacks["Healthcare"],
+        "QQQ": sector_trending_fallbacks["Technology"],
+        "SPY": [
+            {"symbol": "MSFT", "name": "Microsoft", "role": "mega-cap leader"},
+            {"symbol": "AAPL", "name": "Apple", "role": "quality large-cap"},
+            {"symbol": "NVDA", "name": "NVIDIA", "role": "AI leader"},
+        ],
+    }
 
     def _avg_defined(values: List[Optional[float]]) -> Optional[float]:
         filtered = [safe_float(value) for value in values if value is not None]
@@ -5116,6 +5454,229 @@ def _build_trending_stock_response(context: AIAdvisorContext, market: Dict[str, 
             return None
         normalized = ((safe_float(value) - min_value) / (max_value - min_value)) * 100.0
         return _clamp(normalized, 0.0, 100.0)
+
+    def _normalize_trending_item(item: Dict[str, Any], provider: str) -> Optional[Dict[str, Any]]:
+        symbol_value = str(item.get("symbol") or "").strip().upper()
+        name_value = str(item.get("name") or "").strip()
+        if not symbol_value:
+            logger.warning(f"[trending] dropped item missing symbol provider={provider} raw={item}")
+            return None
+        if not name_value:
+            logger.warning(f"[trending] dropped item missing name provider={provider} symbol={symbol_value} raw={item}")
+            return None
+
+        price_value = safe_float(item.get("price"))
+        if price_value is None:
+            logger.warning(f"[trending] dropped item missing price provider={provider} symbol={symbol_value}")
+            return None
+
+        daily_change = safe_float(item.get("daily_change"))
+        if daily_change is None:
+            daily_change = safe_float(item.get("change_pct"))
+        return_1m = safe_float(item.get("return_1m"))
+        if return_1m is None:
+            return_1m = safe_float(item.get("month_return"))
+
+        normalized = {
+            "symbol": symbol_value,
+            "name": name_value,
+            "price": round(price_value, 2),
+            "daily_change": round(daily_change, 2) if daily_change is not None else None,
+            "return_1m": round(return_1m, 2) if return_1m is not None else None,
+            "reason": str(item.get("reason") or "High recent activity and notable price movement.").strip(),
+        }
+        normalized["change_pct"] = normalized["daily_change"]
+        normalized["month_return"] = normalized["return_1m"]
+        if item.get("volume") is not None:
+            volume_value = safe_float(item.get("volume"))
+            normalized["volume"] = int(volume_value) if volume_value is not None else None
+        if item.get("trend_strength") is not None:
+            normalized["trend_strength"] = round(safe_float(item.get("trend_strength")), 1)
+        return normalized
+
+    def _infer_trending_stocks(sector: str, regime: str, suggested_etfs: List[str]) -> List[Dict[str, Any]]:
+        def _score_stock(symbol: str, sector_name: str, regime_name: str) -> Dict[str, Any]:
+            sector_strength_map = {
+                "Energy": 86, "Technology": 78, "Healthcare": 74, "Finance": 70,
+                "Utilities": 72, "Consumer Staples": 71,
+            }
+            momentum_map = {
+                "XOM": 78, "CVX": 72, "SLB": 76, "NVDA": 82, "MSFT": 68, "AMD": 74,
+                "LLY": 70, "JNJ": 58, "UNH": 57, "JPM": 65, "GS": 62, "MS": 61,
+                "NEE": 56, "DUK": 50, "SO": 49, "PG": 52, "KO": 48, "PEP": 47,
+                "AAPL": 64,
+            }
+            risk_map = {
+                "XOM": 70, "CVX": 76, "SLB": 54, "NVDA": 45, "MSFT": 68, "AMD": 50,
+                "LLY": 66, "JNJ": 82, "UNH": 70, "JPM": 63, "GS": 57, "MS": 55,
+                "NEE": 80, "DUK": 84, "SO": 84, "PG": 83, "KO": 86, "PEP": 84,
+                "AAPL": 66,
+            }
+            regime_alignment_map = {
+                "Risk-Off": {"Energy": 82, "Utilities": 84, "Consumer Staples": 84, "Healthcare": 76, "Finance": 55, "Technology": 34},
+                "Late Risk-Off": {"Energy": 78, "Utilities": 80, "Consumer Staples": 79, "Healthcare": 74, "Finance": 58, "Technology": 42},
+                "Risk-On": {"Energy": 64, "Utilities": 45, "Consumer Staples": 44, "Healthcare": 58, "Finance": 66, "Technology": 84},
+                "Neutral": {"Energy": 72, "Utilities": 62, "Consumer Staples": 60, "Healthcare": 66, "Finance": 64, "Technology": 68},
+            }
+            sector_strength = sector_strength_map.get(sector_name, 68)
+            momentum_proxy = momentum_map.get(symbol, 62)
+            risk_score = risk_map.get(symbol, 60)
+            regime_alignment = regime_alignment_map.get(regime_name, regime_alignment_map["Neutral"]).get(sector_name, 60)
+            score = int(round(max(0.0, min(100.0, 0.40 * sector_strength + 0.20 * momentum_proxy + 0.20 * risk_score + 0.20 * regime_alignment))))
+            tags: List[str] = []
+            if regime_alignment >= 78 and risk_score >= 70:
+                tags.append("High Conviction")
+            if momentum_proxy >= 74:
+                tags.append("Momentum Leader")
+            if risk_score >= 80 and sector_name in {"Utilities", "Consumer Staples", "Healthcare"}:
+                tags.append("Defensive Play")
+            if not tags and regime_alignment >= 72:
+                tags.append("Regime Aligned")
+            return {"score": score, "tags": tags}
+
+        picks = list(sector_trending_fallbacks.get(sector, []))
+        if not picks:
+            for etf in suggested_etfs:
+                picks.extend(etf_decomposition.get(str(etf).upper(), []))
+        if not picks:
+            picks = list(sector_trending_fallbacks.get("Consumer Staples" if "risk-off" in regime.lower() else "Technology", []))
+
+        inferred: List[Dict[str, Any]] = []
+        seen = set()
+        for item in picks:
+            symbol = str(item.get("symbol") or "").upper()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            score_payload = _score_stock(symbol, sector, regime)
+            inferred.append({
+                "symbol": symbol,
+                "name": str(item.get("name") or symbol),
+                "price": None,
+                "daily_change": None,
+                "return_1m": None,
+                "reason": f"Estimated leader based on {sector} strength and {item.get('role') or 'sector leadership'}.",
+                "inferred": True,
+                "confidence_label": "Estimated leaders based on sector strength",
+                "change_pct": None,
+                "month_return": None,
+                **score_payload,
+            })
+        inferred.sort(key=lambda row: row.get("score") or 0, reverse=True)
+        return inferred[:5]
+
+    def _fallback_response() -> Dict[str, Any]:
+        top_sector = str((market.get("sector_momentum") or {}).get("sector") or "Energy")
+        second_sector = "Utilities" if str(top_sector).lower() != "utilities" else "Consumer Staples"
+        market_sentiment = str(market.get("market_label") or "Neutral")
+        risk_outlook = str(market.get("risk_outlook") or "High")
+        fear_greed = market.get("market_score")
+        aligned_signal_count = sum(
+            1
+            for value in (market_sentiment, top_sector, risk_outlook)
+            if value not in (None, "", "Unknown")
+        )
+        confidence_split = {
+            "data_confidence": "low",
+            "reasoning_confidence": "high" if aligned_signal_count >= 3 else ("medium" if aligned_signal_count >= 2 else "low"),
+        }
+        suggested_etfs = ["XLE", "XLU"] if "fear" in market_sentiment.lower() or risk_outlook.lower() == "high" else ["SPY", "QQQ"]
+        inferred_items = _infer_trending_stocks(top_sector, market_sentiment, suggested_etfs)
+        answer_lines = [
+            "Trending Stocks Today (Estimated)",
+            "- Estimated leaders based on sector strength",
+            *[f"{idx}. {item['symbol']} (Score: {item.get('score', 'N/A')}) - {', '.join(item.get('tags') or ['Estimated'])}" for idx, item in enumerate(inferred_items, start=1)],
+            "",
+            "Alternative Insight",
+            f"- Top sectors right now: {top_sector}",
+            f"- Secondary strength: {second_sector}",
+            "",
+            "Interpretation",
+            f"- Market is in {market_sentiment} conditions",
+            "- Capital appears to be rotating into defensive leadership rather than broad risk-taking" if risk_outlook.lower() == "high" else "- Leadership is selective, so sector rotation matters more than single-stock momentum",
+            "- Elevated volatility and weak breadth reduce confidence in chasing individual names",
+            "",
+            "Actionable View",
+            f"- Focus on sector ETFs ({', '.join(suggested_etfs)})",
+            "- Avoid chasing individual names without confirmation",
+        ]
+        schema = {
+            "intent": "market_scanner",
+            "answer_title": "Trending Stocks Today",
+            "direct_answer": "Live scanner data is unavailable, so this fallback focuses on sector rotation and macro context instead.",
+            "status": "degraded",
+            "message": "Trending data inferred from sector strength",
+            "items": inferred_items,
+            "trending_stocks": inferred_items,
+            "summary_points": [
+                f"Top sector: {top_sector}",
+                f"Secondary sector: {second_sector}",
+                f"Risk outlook: {risk_outlook}",
+            ],
+            "market_context": {
+                "market_sentiment": market_sentiment,
+                "fear_greed_index": round(safe_float(fear_greed), 1) if fear_greed is not None else None,
+                "top_sector": top_sector,
+            },
+            "alternative_insight": {
+                "top_sectors": [top_sector, second_sector],
+                "suggested_etfs": suggested_etfs,
+            },
+            "risks": [
+                "Risk-off positioning is still present.",
+                "Elevated volatility argues against aggressive stock chasing.",
+                "Weak breadth favors sector-level confirmation.",
+            ],
+            "rationale": [
+                f"{top_sector} is leading current sector rotation.",
+                f"{market_sentiment} conditions and {risk_outlook.lower()} risk outlook support a defensive stance.",
+                "Sector ETFs provide cleaner exposure when scanner confidence is low.",
+            ],
+            "actionable_view": f"Focus on sector ETFs such as {', '.join(suggested_etfs)} and avoid chasing individual names without confirmation.",
+            "confidence": 0.55,
+            **confidence_split,
+            "confidence_split": confidence_split,
+            "sources": ["Sector momentum", "Market sentiment", "Internal technical model"],
+            "confidence_label": "Estimated leaders based on sector strength",
+            "ranking_model": {
+                "weights": {
+                    "sector_strength": 0.40,
+                    "momentum_proxy": 0.20,
+                    "volatility_risk": 0.20,
+                    "regime_alignment": 0.20,
+                }
+            },
+        }
+        return {
+            "intent": "market_scanner",
+            "answer": "\n".join(answer_lines),
+            "confidence": 55,
+            **confidence_split,
+            "sources": ["Sector momentum", "Market sentiment", "Internal technical model"],
+            "followups": [
+                f"Show top stocks in {top_sector}",
+                "Show sector momentum ranking",
+                "What sectors are strongest now?",
+            ],
+            "answer_schema": schema,
+            "summary": {
+                "market_sentiment": market_sentiment,
+                "fear_greed_score": round(safe_float(fear_greed), 1) if fear_greed is not None else None,
+                "trending_sector": top_sector,
+                "risk_outlook": risk_outlook,
+                "signal": "Sector rotation fallback",
+                "suggested_etfs": suggested_etfs,
+                "estimated_leaders": [item["symbol"] for item in inferred_items],
+                "estimated_scores": {item["symbol"]: item.get("score") for item in inferred_items},
+            },
+            "status": {
+                "online": True,
+                "message": "Scanner unavailable, using sector fallback",
+                "live_data_ready": False,
+                "market_context_loaded": True,
+                "degraded": True,
+            },
+        }
 
     symbols = normalize_symbol_list((context.watchlist or []) + (context.recent_searches or []))
     if not symbols:
@@ -5143,9 +5704,9 @@ def _build_trending_stock_response(context: AIAdvisorContext, market: Dict[str, 
                 "symbol": symbol,
                 "name": str(stock.get("company_name") or symbol),
                 "price": round(price, 2),
-                "change_pct": round(price_change, 2) if price_change is not None else None,
+                "daily_change": round(price_change, 2) if price_change is not None else None,
                 "volume": int(volume) if volume is not None else None,
-                "month_return": round(month_return, 2) if month_return is not None else None,
+                "return_1m": round(month_return, 2) if month_return is not None else None,
                 "trend_strength": round(trend_strength, 1),
                 "reason": (
                     "High trading volume and strong recent price action."
@@ -5157,13 +5718,22 @@ def _build_trending_stock_response(context: AIAdvisorContext, market: Dict[str, 
             continue
 
     candidates.sort(key=lambda item: (item.get("trend_strength") or 0), reverse=True)
-    top_names = candidates[:5]
+    top_names = [
+        normalized for normalized in (
+            _normalize_trending_item(item, "get_stock_data") for item in candidates[:5]
+        ) if normalized is not None
+    ]
     if top_names:
         _cache_set(generic_ttl_cache, cache_key, top_names)
     if not top_names:
         cached_top_names = _cache_get(generic_ttl_cache, cache_key, 24 * 60 * 60)
         if cached_top_names:
-            top_names = cached_top_names
+            top_names = [
+                normalized for normalized in (
+                    _normalize_trending_item(item, "cache") for item in cached_top_names
+                ) if normalized is not None
+            ]
+        if top_names:
             top_sector = str((market.get("sector_momentum") or {}).get("sector") or "Relevant data is not available")
             market_sentiment = str(market.get("market_label") or "Relevant data is not available")
             fear_greed = market.get("market_score")
@@ -5210,6 +5780,7 @@ def _build_trending_stock_response(context: AIAdvisorContext, market: Dict[str, 
                     "top_sector": top_sector,
                 },
                 "trending_stocks": top_names,
+                "items": top_names,
                 "risks": [
                     "Cached movers may no longer reflect current intraday leadership.",
                     "Trending names can reverse quickly if volume fades.",
@@ -5249,23 +5820,7 @@ def _build_trending_stock_response(context: AIAdvisorContext, market: Dict[str, 
             }
         return {
             "intent": "market_scanner",
-            "answer": "Market scanner data is temporarily unavailable.",
-            "confidence": 40,
-            "sources": ["Finnhub", "Internal Technical Model"],
-            "followups": [
-                "Show top momentum sectors",
-                "What are the biggest market risks now?",
-                "Compare NVDA vs AMD",
-            ],
-            "answer_schema": {
-                "intent": "market_scanner",
-                "answer_title": "Trending Stocks",
-                "direct_answer": "Market scanner data is temporarily unavailable.",
-                "summary_points": [],
-                "risks": ["Live intraday ranking data is not available."],
-                "confidence": 0.4,
-                "sources": ["Finnhub", "Internal Technical Model"],
-            },
+            **_fallback_response(),
         }
 
     top_sector = str((market.get("sector_momentum") or {}).get("sector") or "Relevant data is not available")
@@ -5315,6 +5870,7 @@ def _build_trending_stock_response(context: AIAdvisorContext, market: Dict[str, 
             "top_sector": top_sector,
         },
         "trending_stocks": top_names,
+        "items": top_names,
         "risks": [
             "Trending names can reverse quickly if volume fades.",
             "Risk-off markets can increase volatility in high-momentum stocks.",
@@ -6241,7 +6797,10 @@ def _generate_grounded_response(
         return fallback_text
 
     prompt = (
-        "You are an AI Investment Reasoning Engine working like a professional equity research analyst.\n"
+        "You are a professional hedge fund analyst.\n"
+        "Always answer directly.\n"
+        "Always explain WHY, not just WHAT.\n"
+        "Never ask generic clarification first.\n"
         "Your job is to interpret real market data and generate structured investment insights.\n"
         "Answer exactly what the user asked and never fabricate market statistics.\n"
         "Use only the provided EVIDENCE JSON.\n"
@@ -6250,21 +6809,15 @@ def _generate_grounded_response(
         "Do not guess.\n"
         "Less irrelevant information is better than more irrelevant information.\n"
         "Always write in a professional investment research tone.\n"
-        "For stock questions, follow this analysis process:\n"
-        "Step 1 — Technical Analysis\n"
-        "Step 2 — Momentum Analysis\n"
-        "Step 3 — News Sentiment\n"
-        "Step 4 — Market Context\n"
-        "Step 5 — Signal Integration\n"
-        "Then answer using this format:\n"
+        "For macro questions: explain cause, effect, and sector impact.\n"
+        "For sector questions: explain rotation, relative strength, and positioning.\n"
+        "For stock questions: explain fundamentals, timing, and risk.\n"
+        "Preferred answer structure is:\n"
         "Market Context\n"
-        "Key Signals\n"
-        "AI Interpretation\n"
-        "Investment Insight\n"
-        "AI Confidence\n"
-        "Risk Level\n"
-        "Sources\n"
-        "For sector analysis, explain sector performance drivers, macro conditions, and sector risks.\n"
+        "Causal Explanation\n"
+        "Sector Impact\n"
+        "Risk\n"
+        "Actionable View\n"
         "For trending stocks, list the stocks, explain why they are trending, and keep it grounded in price action / activity / news if available.\n"
         "For risk questions, focus on downside risks and do not switch to recommendations unless the user asked.\n"
         "Do not use weak phrases like 'I'm not fully confident'.\n\n"
@@ -6375,6 +6928,13 @@ def _advisor_health_snapshot() -> Dict[str, Any]:
 def ai_advisor_endpoint(payload: AIAdvisorRequest | Dict[str, Any]):
     if isinstance(payload, dict):
         payload = AIAdvisorRequest(**payload)
+    if payload.history:
+        merged_history = list(payload.context.history or [])
+        for item in payload.history:
+            text = str(item or "").strip()
+            if text and text not in merged_history:
+                merged_history.append(text)
+        payload.context.history = merged_history[-4:]
     question = (payload.question or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="question is required")

@@ -1,0 +1,3 @@
+{"timestamp": "2026-03-25T15:28:47.738525Z", "regime": "Risk-Off", "confidence": "medium", "momentum": 22, "strength": 23, "volatility": 60, "safe_haven": 80}
+{"timestamp": "2026-03-26T15:28:47.738525Z", "regime": "Neutral", "confidence": "high", "momentum": 50, "strength": 50, "volatility": 50, "safe_haven": 50}
+{"timestamp": "2026-03-27T15:28:47.738525Z", "regime": "Risk-On", "confidence": "medium", "momentum": 68, "strength": 72, "volatility": 35, "safe_haven": 22}

@@ -95,6 +95,10 @@ function StructuredAnswer({ schema, summary, intent, dark }) {
   if (!schema || typeof schema !== "object") return null;
   if (intent === "trending_stock_discovery" && Array.isArray(schema?.trending_stocks)) {
     const marketContext = schema?.market_context || {};
+    const validTrendingStocks = schema.trending_stocks
+      .filter((item) => item && item.symbol && item.name)
+      .slice(0, 5);
+    const isDegraded = schema?.status === "degraded" || schema?.message === "Trending data unavailable";
     return (
       <div className="mt-2 space-y-2 text-[13px]">
         <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
@@ -108,22 +112,35 @@ function StructuredAnswer({ schema, summary, intent, dark }) {
           </ul>
         </div>
         <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
-          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold inline-flex items-center gap-1.5">
-            <LineChartIcon size={12} className="text-cyan-500" /> Trending Stocks
-          </p>
-          <div className="mt-2 space-y-2">
-            {schema.trending_stocks.slice(0, 5).map((item) => (
-              <div key={item.symbol} className={`${dark ? "bg-slate-950/70" : "bg-slate-50"} rounded-lg px-3 py-2`}>
-                <p className="font-semibold">{item.name} ({item.symbol})</p>
-                <p className="text-[12px] text-slate-500">
-                  Price: ${Number(item.price || 0).toFixed(2)}
-                  {item.change_pct != null ? ` • Day change ${Number(item.change_pct) >= 0 ? "+" : ""}${Number(item.change_pct).toFixed(2)}%` : ""}
-                  {item.month_return != null ? ` • 1M return ${Number(item.month_return) >= 0 ? "+" : ""}${Number(item.month_return).toFixed(2)}%` : ""}
-                </p>
-                <p className="text-[12px] mt-1">{item.reason || "Relevant data is not available."}</p>
-              </div>
-            ))}
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold inline-flex items-center gap-1.5">
+              <LineChartIcon size={12} className="text-cyan-500" /> Trending Stocks
+            </p>
+            {isDegraded ? (
+              <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                Data unavailable
+              </span>
+            ) : null}
           </div>
+          {validTrendingStocks.length === 0 ? (
+            <div className={`${dark ? "bg-slate-950/70 text-slate-300" : "bg-slate-50 text-slate-500"} mt-2 rounded-lg px-3 py-3`}>
+              No reliable trending stocks available
+            </div>
+          ) : (
+            <div className="mt-2 space-y-2">
+              {validTrendingStocks.map((item) => (
+                <div key={item.symbol} className={`${dark ? "bg-slate-950/70" : "bg-slate-50"} rounded-lg px-3 py-2`}>
+                  <p className="font-semibold">{item.name} ({item.symbol})</p>
+                  <p className="text-[12px] text-slate-500">
+                    Price: ${Number(item.price || 0).toFixed(2)}
+                    {item.change_pct != null ? ` • Day change ${Number(item.change_pct) >= 0 ? "+" : ""}${Number(item.change_pct).toFixed(2)}%` : ""}
+                    {item.month_return != null ? ` • 1M return ${Number(item.month_return) >= 0 ? "+" : ""}${Number(item.month_return).toFixed(2)}%` : ""}
+                  </p>
+                  <p className="text-[12px] mt-1">{item.reason || "Relevant data is not available."}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -215,6 +232,125 @@ function StructuredAnswer({ schema, summary, intent, dark }) {
       </div>
     );
   }
+  if (intent === "macro_analysis") {
+    const marketContext = schema?.market_context || {};
+    const sectorAnalysis = schema?.sector_analysis || {};
+    const rationale = Array.isArray(schema?.rationale) ? schema.rationale : Array.isArray(schema?.summary_points) ? schema.summary_points : [];
+    const risks = Array.isArray(schema?.risks) ? schema.risks : [];
+    const chain = Array.isArray(schema?.cause_effect_chain) ? schema.cause_effect_chain : [];
+    return (
+      <div className="mt-2 space-y-2 text-[13px]">
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Market Context</p>
+          <p className="mt-1 font-medium">{buildMarketSummary(summary)}</p>
+        </div>
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Causal Explanation</p>
+          <ul className="mt-1 space-y-1">
+            {chain.slice(0, 4).map((line, idx) => (
+              <li key={`${line}-${idx}`} className="leading-relaxed">• {line}</li>
+            ))}
+            {!chain.length && rationale.slice(0, 3).map((line, idx) => (
+              <li key={`${line}-${idx}`} className="leading-relaxed">• {line}</li>
+            ))}
+          </ul>
+        </div>
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Sector Rotation</p>
+          <ul className="mt-1 space-y-1">
+            <li>• Leading sector: {sectorAnalysis?.sector || summary?.trending_sector || "Relevant data is not available."}</li>
+            <li>• Preferred positioning: {schema?.actionable_view || "Relevant data is not available."}</li>
+          </ul>
+        </div>
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Risk Context</p>
+          <ul className="mt-1 space-y-1">
+            {risks.slice(0, 4).map((line, idx) => (
+              <li key={`${line}-${idx}`} className="leading-relaxed">• {line}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    );
+  }
+  if (intent === "sector_stock_picker" || intent === "sector_analysis") {
+    const picker = schema?.sector_stock_picker || {};
+    const comparison = schema?.sector_comparison || {};
+    const implementation = schema?.implementation || {};
+    const picks = Array.isArray(picker?.stocks) ? picker.stocks.slice(0, 5) : [];
+    const grouped = picker?.grouped || {};
+    return (
+      <div className="mt-2 space-y-2 text-[13px]">
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Sector Rotation</p>
+          <ul className="mt-1 space-y-1">
+            <li>• Focus sector: {picker?.sector || schema?.sector_overview?.sector || summary?.trending_sector || "Relevant data is not available."}</li>
+            {comparison?.sector_rank != null ? <li>• Sector rank: #{comparison.sector_rank}</li> : null}
+            {comparison?.relative_vs_spy_3m != null ? <li>• Relative vs SPY (3M): {Number(comparison.relative_vs_spy_3m) >= 0 ? "+" : ""}{Number(comparison.relative_vs_spy_3m).toFixed(2)}%</li> : null}
+          </ul>
+        </div>
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">High Conviction Picks</p>
+          <ul className="mt-1 space-y-1">
+            {picks.map((row) => (
+              <li key={row.symbol} className="leading-relaxed">
+                • {row.name} ({row.symbol}){row.bucket ? ` • ${row.bucket}` : ""}{row.return_3m_pct != null ? ` • 3M ${Number(row.return_3m_pct) >= 0 ? "+" : ""}${Number(row.return_3m_pct).toFixed(2)}%` : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Positioning Plan</p>
+          <ul className="mt-1 space-y-1">
+            {implementation?.allocation_suggestion ? <li>• {implementation.allocation_suggestion}</li> : null}
+            {implementation?.entry_timing ? <li>• {implementation.entry_timing}</li> : null}
+            {implementation?.exit_conditions ? <li>• {implementation.exit_conditions}</li> : null}
+            {!implementation?.allocation_suggestion && grouped?.core?.length ? <li>• Core: {grouped.core.map((row) => row.symbol).join(", ")}</li> : null}
+          </ul>
+        </div>
+      </div>
+    );
+  }
+  if (intent === "single_stock_analysis" || intent === "stock_recommendation" || intent === "open_recommendation") {
+    const drivers = Array.isArray(schema?.fundamental_drivers?.points) ? schema.fundamental_drivers.points : [];
+    const risks = Array.isArray(schema?.risk_factors?.points) ? schema.risk_factors.points : Array.isArray(schema?.risks) ? schema.risks : [];
+    const interpretation = schema?.investment_interpretation || {};
+    const timeHorizon = schema?.time_horizon || {};
+    return (
+      <div className="mt-2 space-y-2 text-[13px]">
+        {summary ? (
+          <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+            <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Market Context</p>
+            <p className="mt-1 font-medium">{buildMarketSummary(summary)}</p>
+          </div>
+        ) : null}
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Fundamentals</p>
+          <ul className="mt-1 space-y-1">
+            {drivers.slice(0, 4).map((line, idx) => (
+              <li key={`${line}-${idx}`} className="leading-relaxed">• {line}</li>
+            ))}
+          </ul>
+        </div>
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Timing</p>
+          <ul className="mt-1 space-y-1">
+            {timeHorizon?.short_term ? <li>• {timeHorizon.short_term}</li> : null}
+            {timeHorizon?.medium_term ? <li>• {timeHorizon.medium_term}</li> : null}
+            {interpretation?.text ? <li>• {interpretation.text}</li> : null}
+          </ul>
+        </div>
+        <div className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} rounded-xl border p-2.5`}>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Risks</p>
+          <ul className="mt-1 space-y-1">
+            {risks.slice(0, 4).map((line, idx) => (
+              <li key={`${line}-${idx}`} className="leading-relaxed">• {line}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    );
+  }
   const rationale = Array.isArray(schema.rationale) ? schema.rationale : Array.isArray(schema.summary_points) ? schema.summary_points : [];
   const risks = Array.isArray(schema.risks) ? schema.risks : [];
   const outlook = schema.actionable_view || schema.stance || "-";
@@ -292,6 +428,7 @@ export default function ChatMessage({ message, dark = false }) {
         {!isUser ? (
           <ConfidenceFooter
             confidence={message.confidence}
+            confidenceSplit={message.confidenceSplit}
             sources={message.sources}
             updatedAt={message.time}
             dataCoverage={message.dataValidation}

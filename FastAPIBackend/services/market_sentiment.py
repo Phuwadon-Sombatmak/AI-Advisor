@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict, Any, List
+import json
 
 import pandas as pd
 import yfinance as yf
@@ -19,6 +21,38 @@ MARKET_BREADTH_UNIVERSE: List[str] = [
     "PG", "UNH", "V", "MA", "HD", "BAC", "AVGO", "LLY", "PFE", "KO",
     "PEP", "MRK", "CSCO", "WMT", "INTC", "CVX", "DIS", "ADBE", "CRM", "NFLX",
 ]
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _regime_history_file() -> Path:
+    return _project_root() / "qa" / "results" / "regime_history.jsonl"
+
+
+def _append_regime_history(payload: Dict[str, Any]) -> None:
+    try:
+        indicators = payload.get("indicators") or {}
+        row = {
+            "timestamp": payload.get("updated_at") or (datetime.utcnow().isoformat() + "Z"),
+            "regime": payload.get("regime"),
+            "confidence": payload.get("confidence"),
+            "sentiment_score": payload.get("sentiment_score"),
+            "sentiment_label": payload.get("sentiment_label"),
+            "cnn_reference_score": payload.get("cnn_reference_score"),
+            "cnn_divergence": payload.get("cnn_divergence"),
+            "momentum": indicators.get("momentum"),
+            "strength": indicators.get("strength"),
+            "volatility": indicators.get("volatility"),
+            "safe_haven": indicators.get("safeHaven"),
+        }
+        path = _regime_history_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 def clamp(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
@@ -56,6 +90,95 @@ def sentiment_label(score: float) -> str:
     if score <= 74:
         return "Greed"
     return "Extreme Greed"
+
+
+def _invert_score(value: float) -> float:
+    return clamp(100.0 - float(value))
+
+
+def compute_market_regime(momentum: float, strength: float, volatility: float) -> str:
+    momentum = float(momentum)
+    strength = float(strength)
+    volatility = float(volatility)
+    if momentum < 30.0 and strength < 30.0:
+        return "Risk-Off"
+    if volatility <= 60.0 and momentum < 40.0 and strength < 45.0:
+        return "Late Risk-Off"
+    if volatility > 70.0 and momentum < 40.0:
+        return "Risk-Off"
+    if float(momentum) > 60.0 and float(strength) > 60.0:
+        return "Risk-On"
+    return "Neutral"
+
+
+def _regime_confidence(regime: str, momentum: float, strength: float, volatility: float, safe_haven: float) -> str:
+    aligned = 0
+    if regime == "Risk-Off":
+        aligned += 1 if float(momentum) < 30.0 else 0
+        aligned += 1 if float(strength) < 30.0 else 0
+        aligned += 1 if float(momentum) < 40.0 else 0
+        aligned += 1 if float(safe_haven) > 60.0 else 0
+    elif regime == "Late Risk-Off":
+        aligned += 1 if float(volatility) <= 60.0 else 0
+        aligned += 1 if float(momentum) < 40.0 else 0
+        aligned += 1 if float(strength) < 45.0 else 0
+        aligned += 1 if float(safe_haven) >= 50.0 else 0
+    elif regime == "Risk-On":
+        aligned += 1 if float(momentum) > 60.0 else 0
+        aligned += 1 if float(strength) > 60.0 else 0
+        aligned += 1 if float(volatility) < 45.0 else 0
+        aligned += 1 if float(safe_haven) < 45.0 else 0
+    else:
+        aligned += 1 if 40.0 <= float(momentum) <= 60.0 else 0
+        aligned += 1 if 40.0 <= float(strength) <= 60.0 else 0
+        aligned += 1 if 35.0 <= float(volatility) <= 65.0 else 0
+        aligned += 1 if 35.0 <= float(safe_haven) <= 65.0 else 0
+
+    if aligned >= 3:
+        return "high"
+    if aligned >= 2:
+        return "medium"
+    return "low"
+
+
+def _build_positioning(regime: str) -> Dict[str, Any]:
+    if regime == "Risk-Off":
+        return {
+            "overweight": ["Energy", "Utilities", "Consumer Staples"],
+            "neutral": ["Healthcare", "Financials"],
+            "underweight": ["Technology", "Growth"],
+            "suggested_etfs": ["XLP", "XLV", "XLE"],
+        }
+    if regime == "Late Risk-Off":
+        return {
+            "overweight": ["Utilities", "Consumer Staples", "Healthcare"],
+            "neutral": ["Energy", "Financials"],
+            "underweight": ["Technology"],
+            "suggested_etfs": ["XLP", "XLV", "XLE"],
+        }
+    if regime == "Risk-On":
+        return {
+            "overweight": ["Technology", "Semiconductors"],
+            "neutral": ["Financials", "Industrials"],
+            "underweight": ["Defensive"],
+            "suggested_etfs": ["QQQ", "XLK", "SOXX"],
+        }
+    return {
+        "overweight": ["Balanced allocation"],
+        "neutral": ["Technology", "Healthcare", "Industrials"],
+        "underweight": ["High-beta Growth"],
+        "suggested_etfs": ["SPY", "XLI"],
+    }
+
+
+def _regime_interpretation(regime: str) -> str:
+    if regime == "Risk-Off":
+        return "Momentum and breadth are both weak, so market conditions remain clearly defensive."
+    if regime == "Late Risk-Off":
+        return "Volatility calming does not imply bullish recovery when momentum and breadth remain weak."
+    if regime == "Risk-On":
+        return "Momentum and breadth are strong enough to support a pro-risk posture."
+    return "Signals are mixed, so a balanced allocation remains the default posture."
 
 
 def _extract_number(node: Any) -> float:
@@ -302,15 +425,16 @@ def _market_volatility(vix_close: pd.Series) -> float:
     current = float(vix_close.iloc[-1])
     ma_50 = float(vix_close.rolling(50).mean().dropna().iloc[-1])
     ratio = current / ma_50 if ma_50 else 1.0
-    # Lower VIX vs average => greed (higher score), higher VIX => fear (lower score)
-    return scale_linear(ratio, 1.5, 0.7)
+    # Higher VIX relative to its average means more fear / volatility demand.
+    return scale_linear(ratio, 0.7, 1.5)
 
 
 def _safe_haven_demand(spx_close: pd.Series, tnx_close: pd.Series) -> float:
     spx_ret20 = float(spx_close.pct_change(20).dropna().iloc[-1]) * 100.0
     tnx_ret20 = float(tnx_close.pct_change(20).dropna().iloc[-1]) * 100.0
     spread = spx_ret20 - tnx_ret20
-    return scale_linear(spread, -5.0, 5.0)
+    # Higher safe-haven demand means Treasuries outperform equities.
+    return scale_linear(-spread, -5.0, 5.0)
 
 
 def _market_trend(spx_close: pd.Series) -> float:
@@ -352,13 +476,22 @@ def _compute_internal_indicators(now: datetime) -> Dict[str, Any]:
     except Exception:
         safe_haven = 50.0
 
-    # Final Fear & Greed Index from 4 independent indicators
-    score = round((momentum + strength + volatility + safe_haven) / 4.0)
-    score = int(clamp(score))
+    sentiment_score = (
+        (0.35 * momentum)
+        + (0.25 * strength)
+        + (0.25 * _invert_score(safe_haven))
+        + (0.15 * _invert_score(volatility))
+    )
+    sentiment_score = int(round(clamp(sentiment_score)))
+    regime = compute_market_regime(momentum, strength, volatility)
+    confidence = _regime_confidence(regime, momentum, strength, volatility, safe_haven)
+    positioning = _build_positioning(regime)
 
     return {
-        "score": score,
-        "sentiment": sentiment_label(score),
+        "sentiment_score": sentiment_score,
+        "sentiment_label": sentiment_label(sentiment_score),
+        "score": sentiment_score,
+        "sentiment": sentiment_label(sentiment_score),
         "updated_at": now.isoformat() + "Z",
         "source": "InternalModel",
         "indicators": {
@@ -367,13 +500,36 @@ def _compute_internal_indicators(now: datetime) -> Dict[str, Any]:
             "volatility": round(volatility),
             "safeHaven": round(safe_haven),
         },
+        "weights": {
+            "momentum": 0.35,
+            "strength": 0.25,
+            "safe_haven_inverse": 0.25,
+            "volatility_inverse": 0.15,
+        },
+        "regime": regime,
+        "confidence": confidence,
+        "regime_interpretation": _regime_interpretation(regime),
+        "positioning": {
+            "overweight": positioning["overweight"],
+            "neutral": positioning["neutral"],
+            "underweight": positioning["underweight"],
+        },
+        "suggested_etfs": positioning["suggested_etfs"],
+        "cnn_reference": {
+            "score": None,
+            "divergence": None,
+        },
+        "cnn_reference_score": None,
+        "cnn_divergence": None,
         "methodology": {
-            "mode": "internal_fallback",
+            "mode": "internal_model_primary",
             "benchmark": "SP500 (Finnhub primary)",
             "momentum": "SP500 vs MA125",
             "strength": "% breadth universe above MA50",
-            "volatility": "VIX relative to 50D average (inverse scaled)",
-            "safe_haven": "SP500 20D return vs Treasury proxy (TLT) 20D return",
+            "volatility": "VIX relative to 50D average (fear metric; higher = more volatility)",
+            "safe_haven": "Treasury proxy outperformance vs SP500 over 20D (fear metric; higher = more flight-to-safety)",
+            "headline_score": "0.35*momentum + 0.25*strength + 0.25*(100-safe_haven) + 0.15*(100-volatility)",
+            "regime_note": "Volatility calming does not imply bullish recovery when momentum and breadth remain weak.",
         },
     }
 
@@ -390,38 +546,39 @@ def compute_market_sentiment(force_refresh: bool = False) -> Dict[str, Any]:
         internal_payload = None
 
     cnn = _fetch_cnn_fear_greed()
-    if cnn.get("ok"):
-        score = int(clamp(cnn.get("score", 50)))
-        indicators = (internal_payload or {}).get("indicators") or {
-            "momentum": 50,
-            "strength": 50,
-            "volatility": 50,
-            "safeHaven": 50,
-        }
-        payload = {
-            "score": score,
-            "sentiment": str(cnn.get("sentiment") or sentiment_label(score)),
-            "updated_at": now.isoformat() + "Z",
-            "source": "CNN",
-            "source_detail": {
-                "name": "CNN Fear & Greed Index",
-                "endpoint": cnn.get("endpoint"),
-                "fetched_at": cnn.get("fetched_at"),
-            },
-            "indicators": indicators,
-            "methodology": {
-                "mode": "cnn_primary",
-                "note": "Using CNN Fear & Greed Index as headline score; sub-indicators computed from live market data.",
-            },
-        }
-        _cache_data["payload"] = payload
-        _cache_data["expires_at"] = now + CACHE_TTL
-        return payload
-
     if internal_payload is None:
         raise ValueError("Unable to compute market sentiment from CNN and internal model")
-    payload = internal_payload
+
+    payload = dict(internal_payload)
+    if cnn.get("ok"):
+        cnn_score = int(clamp(cnn.get("score", 50)))
+        divergence = int(round(float(payload["sentiment_score"]) - cnn_score))
+        payload["cnn_reference"] = {
+            "score": cnn_score,
+            "divergence": divergence,
+            "label": str(cnn.get("sentiment") or sentiment_label(cnn_score)),
+            "fetched_at": cnn.get("fetched_at"),
+            "endpoint": cnn.get("endpoint"),
+        }
+        payload["cnn_reference_score"] = cnn_score
+        payload["cnn_divergence"] = divergence
+        payload["source_detail"] = {
+            "name": "CNN Fear & Greed Index",
+            "endpoint": cnn.get("endpoint"),
+            "fetched_at": cnn.get("fetched_at"),
+        }
+    else:
+        payload["cnn_reference"] = {
+            "score": None,
+            "divergence": None,
+            "label": None,
+            "fetched_at": None,
+            "endpoint": None,
+        }
+        payload["cnn_reference_score"] = None
+        payload["cnn_divergence"] = None
 
     _cache_data["payload"] = payload
     _cache_data["expires_at"] = now + CACHE_TTL
+    _append_regime_history(payload)
     return payload

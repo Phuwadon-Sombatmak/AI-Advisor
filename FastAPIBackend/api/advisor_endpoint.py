@@ -14,16 +14,44 @@ class AdvisorEndpointService:
         self.intent_engine = intent_engine or IntentDetectionEngine()
 
     def handle(self, question: str, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        intent_result = self.intent_engine.detect(question)
+        history = list((context or {}).get("history") or [])
+        intent_result = self.intent_engine.detect(question, history)
+        classified = self.intent_engine.classify_intent(question, history)
+        resolved_context = self.intent_engine.resolve_full_context(question, history)
         selected_stock = str(context.get("selected_stock") or "").upper().strip()
         is_thai = any("\u0E00" <= char <= "\u0E7F" for char in str(question or ""))
         augmented_context = {
             **(context or {}),
             "user_question": question,
             "response_language": "th" if is_thai else "en",
+            "intent_classification": classified,
+            "resolved_context": resolved_context,
         }
 
         if intent_result.intent == "invalid_query":
+            classified_type = str(classified.get("type") or "")
+            classified_entity = classified.get("entity")
+            classified_confidence = float(classified.get("confidence") or 0.0)
+            if classified_confidence >= 0.6:
+                if classified_type == "macro_analysis":
+                    response = self.reasoning_engine.analyze_macro(question, augmented_context)
+                elif classified_type in {"sector_stock_picker", "sector_winners_analysis"}:
+                    response = self.reasoning_engine.analyze_sector_stock_picker(question, augmented_context)
+                elif classified_type == "sector_analysis":
+                    response = self.reasoning_engine.analyze_sector(question, augmented_context)
+                elif classified_type == "stock_analysis" and (selected_stock or classified_entity):
+                    response = self.reasoning_engine.analyze_stock(str(selected_stock or classified_entity), augmented_context)
+                else:
+                    response = self.reasoning_engine.analyze_knowledge_guidance(question, augmented_context)
+
+                if response:
+                    response.setdefault("answer_schema", {})
+                    response["answer_schema"]["intent_confidence"] = classified_confidence
+                    response["answer_schema"]["router_mode"] = "classifier_fallback"
+                    if response.get("confidence") is None:
+                        response["confidence"] = 45
+                    return response
+
             return {
                 "intent": "invalid_query",
                 "analysis_type": "query_validation",
@@ -38,6 +66,7 @@ class AdvisorEndpointService:
                     "entities": intent_result.entities,
                     "entity_kind": intent_result.entity_kind,
                     "source_tags": ["Internal Intent Router"],
+                    "intent_confidence": classified_confidence,
                 },
                 "followups": [
                     *(
@@ -87,7 +116,7 @@ class AdvisorEndpointService:
             return self.reasoning_engine.analyze_sector(question, comparison_context)
         if intent_result.intent in {"risk_explanation", "sector_explanation"}:
             return self.reasoning_engine.analyze_risk(question, augmented_context)
-        if intent_result.intent == "sector_stock_picker":
+        if intent_result.intent in {"sector_stock_picker", "sector_winners_analysis"}:
             return self.reasoning_engine.analyze_sector_stock_picker(question, augmented_context)
         if intent_result.intent == "global_market_query":
             if intent_result.query_scope == "sector_ranking":

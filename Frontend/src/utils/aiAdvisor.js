@@ -11,11 +11,12 @@ export function mapConfidenceToBadge(confidence = 0) {
 
 export function buildMarketSummary(summary = {}) {
   if (!summary || typeof summary !== "object") return "";
-  const sentiment = summary.market_sentiment || "N/A";
+  const regime = summary.market_regime || summary.market_sentiment || "N/A";
+  const confidence = summary.regime_confidence || "N/A";
   const score = summary.fear_greed_score ?? "-";
   const sector = summary.trending_sector || "N/A";
   const risk = summary.risk_outlook || "N/A";
-  return `Market ${sentiment} (${score}) • Sector ${sector} • Risk ${risk}`;
+  return `Regime ${regime} (${confidence}) • CNN ${score} • Sector ${sector} • Risk ${risk}`;
 }
 
 export function getFollowupPrompts(intent = "unclear_query", schema = {}, fallback = [], chatState = {}) {
@@ -103,6 +104,15 @@ export function getFollowupPrompts(intent = "unclear_query", schema = {}, fallba
 }
 
 export function formatAssistantResponse(raw = {}) {
+  const confidenceSplit =
+    raw.confidence_split ||
+    raw.answer_schema?.confidence_split ||
+    ((raw.data_confidence || raw.reasoning_confidence || raw.answer_schema?.data_confidence || raw.answer_schema?.reasoning_confidence)
+      ? {
+          data_confidence: raw.data_confidence || raw.answer_schema?.data_confidence || null,
+          reasoning_confidence: raw.reasoning_confidence || raw.answer_schema?.reasoning_confidence || null,
+        }
+      : null);
   return {
     intent: raw.intent || "unclear_query",
     intentCategory: raw.intent_category || "",
@@ -118,5 +128,6 @@ export function formatAssistantResponse(raw = {}) {
     schema: raw.answer_schema || null,
     followups: Array.isArray(raw.followups) ? raw.followups : [],
     status: raw.status || null,
+    confidenceSplit,
   };
 }
