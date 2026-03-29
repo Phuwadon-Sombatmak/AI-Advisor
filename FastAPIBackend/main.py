@@ -4337,43 +4337,53 @@ def _calculate_portfolio_overview(user_id: int, range_value: str = "1m") -> Dict
         if date_key and close > 0:
             benchmark_by_date[date_key] = close
 
-    if performance and benchmark_by_date:
+    portfolio_return_pct_latest = 0.0
+    benchmark_return_pct_latest = 0.0
+    outperformance_pct_latest = 0.0
+
+    if performance:
         first_portfolio_value = float(performance[0]["value"] or 0.0)
-        base_benchmark_close = None
+        first_benchmark_close = None
         latest_benchmark_close = None
-        enriched_performance = []
         for point in performance:
             label = point["label"]
             if label in benchmark_by_date:
                 latest_benchmark_close = benchmark_by_date[label]
-            if latest_benchmark_close is None:
-                continue
-            if base_benchmark_close is None:
-                base_benchmark_close = latest_benchmark_close
-            benchmark_value = (
-                first_portfolio_value * (latest_benchmark_close / base_benchmark_close)
-                if first_portfolio_value > 0 and base_benchmark_close > 0
-                else 0.0
-            )
+                if first_benchmark_close is None:
+                    first_benchmark_close = latest_benchmark_close
+
             portfolio_return_pct = (
-                ((float(point["value"]) / first_portfolio_value) - 1.0) * 100.0
+                ((float(point["value"]) - first_portfolio_value) / first_portfolio_value) * 100.0
                 if first_portfolio_value > 0
                 else 0.0
             )
-            benchmark_return_pct = (
-                ((benchmark_value / first_portfolio_value) - 1.0) * 100.0
-                if first_portfolio_value > 0
+            spy_return_pct = (
+                ((latest_benchmark_close - first_benchmark_close) / first_benchmark_close) * 100.0
+                if latest_benchmark_close is not None and first_benchmark_close is not None and first_benchmark_close > 0
                 else 0.0
             )
-            enriched_performance.append(
-                {
-                    **point,
-                    "benchmark": round(benchmark_value, 2),
-                    "portfolioReturnPct": round(portfolio_return_pct, 2),
-                    "benchmarkReturnPct": round(benchmark_return_pct, 2),
-                }
+            outperformance_pct = portfolio_return_pct - spy_return_pct
+            portfolio_index = (
+                (float(point["value"]) / first_portfolio_value) * 100.0
+                if first_portfolio_value > 0
+                else 100.0
             )
-        performance = enriched_performance or performance
+            spy_index = (
+                (latest_benchmark_close / first_benchmark_close) * 100.0
+                if latest_benchmark_close is not None and first_benchmark_close is not None and first_benchmark_close > 0
+                else 100.0
+            )
+
+            point["portfolioReturnPct"] = round(portfolio_return_pct, 2)
+            point["spyReturnPct"] = round(spy_return_pct, 2)
+            point["outperformancePct"] = round(outperformance_pct, 2)
+            point["portfolioIndex"] = round(portfolio_index, 2)
+            point["spyIndex"] = round(spy_index, 2)
+
+        if performance:
+            portfolio_return_pct_latest = safe_float(performance[-1].get("portfolioReturnPct"))
+            benchmark_return_pct_latest = safe_float(performance[-1].get("spyReturnPct"))
+            outperformance_pct_latest = safe_float(performance[-1].get("outperformancePct"))
     if len(performance) > 120:
         step = max(1, len(performance) // 120)
         performance = performance[::step]
@@ -4464,10 +4474,9 @@ def _calculate_portfolio_overview(user_id: int, range_value: str = "1m") -> Dict
                 "explanation": f"{portfolio_score}/100 \u2192 {concentration_note.lower()}",
             },
             "benchmark": benchmark_symbol,
-            "benchmarkReturnPct": round(
-                safe_float(performance[-1].get("benchmarkReturnPct")) if performance and isinstance(performance[-1], dict) else 0.0,
-                2,
-            ),
+            "portfolioReturnPct": round(portfolio_return_pct_latest, 2),
+            "spyReturnPct": round(benchmark_return_pct_latest, 2),
+            "outperformancePct": round(outperformance_pct_latest, 2),
         },
         "rows": rows,
         "allocation": allocation,

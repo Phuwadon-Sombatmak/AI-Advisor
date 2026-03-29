@@ -27,10 +27,20 @@ function SummaryCard({ label, value, hint = "", tone = "neutral", dark = false }
   );
 }
 
+function formatPercentWithArrow(value) {
+  const numeric = Number(value || 0);
+  const arrow = numeric >= 0 ? "↑" : "↓";
+  return `${arrow} ${numeric >= 0 ? "+" : ""}${numeric.toFixed(2)}%`;
+}
+
 export default function PortfolioSummary({ summary, dark = false, language = "en" }) {
   const { t } = useTranslation();
+  const portfolioReturnPct = Number(summary.portfolioReturnPct || 0);
+  const spyReturnPct = Number(summary.spyReturnPct || 0);
+  const outperformancePct = Number(summary.outperformancePct || 0);
+
   return (
-    <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-4">
+    <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-7 gap-4">
       <SummaryCard
         label={t("portfolioValue")}
         value={formatCurrencyUSD(summary.totalValue || 0, language)}
@@ -65,10 +75,24 @@ export default function PortfolioSummary({ summary, dark = false, language = "en
         dark={dark}
       />
       <SummaryCard
-        label={t("benchmarkComparison")}
-        value={`${Number(summary.benchmarkReturnPct || 0) >= 0 ? "+" : ""}${Number(summary.benchmarkReturnPct || 0).toFixed(2)}% vs ${summary.benchmark || "SPY"}`}
-        tone={Number(summary.benchmarkReturnPct || 0) >= 0 ? "gain" : "loss"}
-        hint={t("benchmarkComparisonHint")}
+        label={t("portfolioReturn")}
+        value={formatPercentWithArrow(portfolioReturnPct)}
+        tone={portfolioReturnPct >= 0 ? "gain" : "loss"}
+        hint={t("portfolioReturnHint")}
+        dark={dark}
+      />
+      <SummaryCard
+        label={`${summary.benchmark || "SPY"} ${t("returnLabel")}`}
+        value={formatPercentWithArrow(spyReturnPct)}
+        tone={spyReturnPct >= 0 ? "gain" : "loss"}
+        hint={t("spyReturnHint")}
+        dark={dark}
+      />
+      <SummaryCard
+        label={t("outperformanceVsSpy")}
+        value={formatPercentWithArrow(outperformancePct)}
+        tone={outperformancePct >= 0 ? "gain" : "loss"}
+        hint={t("outperformanceVsSpyHint")}
         dark={dark}
       />
     </section>

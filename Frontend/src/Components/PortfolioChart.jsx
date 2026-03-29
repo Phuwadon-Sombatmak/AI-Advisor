@@ -4,6 +4,36 @@ import { CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis, AreaChart, A
 
 const RANGES = ["1M", "3M", "6M", "1Y"];
 
+function CustomTooltip({ active, payload, label, dark, t }) {
+  if (!active || !payload?.length) return null;
+  const point = payload[0]?.payload || {};
+  const portfolioReturn = Number(point?.portfolioReturnPct || 0);
+  const spyReturn = Number(point?.spyReturnPct || 0);
+  const difference = Number(point?.outperformancePct || 0);
+
+  return (
+    <div className={`rounded-xl border px-3 py-2 shadow-lg text-xs ${dark ? "bg-slate-900 border-slate-700 text-slate-100" : "bg-white border-slate-200 text-slate-800"}`}>
+      <div className="mb-2 font-semibold">{label}</div>
+      <div className="space-y-1">
+        <div className="flex items-center justify-between gap-4">
+          <span>{t("portfolioReturn")}</span>
+          <span className="font-semibold">{portfolioReturn >= 0 ? "+" : ""}{portfolioReturn.toFixed(2)}%</span>
+        </div>
+        <div className="flex items-center justify-between gap-4">
+          <span>SPY {t("returnLabel")}</span>
+          <span className="font-semibold">{spyReturn >= 0 ? "+" : ""}{spyReturn.toFixed(2)}%</span>
+        </div>
+        <div className="flex items-center justify-between gap-4">
+          <span>{t("differenceLabel")}</span>
+          <span className={`font-semibold ${difference >= 0 ? "text-emerald-500" : "text-rose-500"}`}>
+            {difference >= 0 ? "+" : ""}{difference.toFixed(2)}%
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PortfolioChart({ data = [], range = "1M", onRangeChange = () => {}, dark = false }) {
   const { t } = useTranslation();
 
@@ -39,24 +69,29 @@ export default function PortfolioChart({ data = [], range = "1M", onRangeChange 
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke={dark ? "#1e293b" : "#e2e8f0"} />
             <XAxis dataKey="label" stroke={dark ? "#94a3b8" : "#64748b"} tickLine={false} axisLine={false} />
-            <YAxis stroke={dark ? "#94a3b8" : "#64748b"} tickLine={false} axisLine={false} width={60} />
+            <YAxis
+              stroke={dark ? "#94a3b8" : "#64748b"}
+              tickLine={false}
+              axisLine={false}
+              width={64}
+              domain={["dataMin - 2", "dataMax + 2"]}
+              tickFormatter={(value) => `${Number(value || 0).toFixed(0)}`}
+            />
             <Tooltip
-              formatter={(value, name) => {
-                const label =
-                  name === "value" ? t("portfolioValue") : name === "benchmark" ? `${t("benchmark")}: SPY` : name;
-                const amount = Number(value || 0).toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                });
-                return [`$${amount}`, label];
-              }}
+              content={<CustomTooltip dark={dark} t={t} />}
             />
             <Legend
-              formatter={(value) => (value === "value" ? t("portfolioValue") : value === "benchmark" ? `${t("benchmark")}: SPY` : value)}
+              formatter={(value) =>
+                value === "portfolioIndex"
+                  ? `${t("portfolioReturn")} (100)`
+                  : value === "spyIndex"
+                    ? `${t("benchmark")}: SPY`
+                    : value
+              }
             />
-            <Area type="monotone" dataKey="value" stroke="#2563EB" fill="url(#portfolioGradient)" strokeWidth={3} />
-            {data.some((row) => Number(row?.benchmark || 0) > 0) ? (
-              <Line type="monotone" dataKey="benchmark" stroke="#F59E0B" strokeWidth={2} dot={false} />
+            <Area type="monotone" dataKey="portfolioIndex" stroke="#2563EB" fill="url(#portfolioGradient)" strokeWidth={3} />
+            {data.some((row) => row?.spyIndex !== undefined) ? (
+              <Line type="monotone" dataKey="spyIndex" stroke="#F59E0B" strokeWidth={2} dot={false} />
             ) : null}
           </AreaChart>
         </ResponsiveContainer>

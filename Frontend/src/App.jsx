@@ -2981,7 +2981,9 @@ const PortfolioPage = ({ watchlist = [] }) => {
     portfolioScore: 0,
     scoreBreakdown: {},
     benchmark: "SPY",
-    benchmarkReturnPct: 0,
+    portfolioReturnPct: 0,
+    spyReturnPct: 0,
+    outperformancePct: 0,
   });
   const [allocation, setAllocation] = useState([]);
   const [sectorExposure, setSectorExposure] = useState([]);
@@ -3070,7 +3072,9 @@ const PortfolioPage = ({ watchlist = [] }) => {
           portfolioScore: 0,
           scoreBreakdown: {},
           benchmark: "SPY",
-          benchmarkReturnPct: 0,
+          portfolioReturnPct: 0,
+          spyReturnPct: 0,
+          outperformancePct: 0,
         });
       } finally {
         setLoading(false);
