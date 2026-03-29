@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 const EMPTY_FORM = {
   symbol: "",
@@ -23,6 +23,11 @@ export default function PortfolioPositionModal({
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupState, setLookupState] = useState("idle");
   const [selectedName, setSelectedName] = useState("");
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const inputRef = useRef(null);
+  const lookupContainerRef = useRef(null);
+  const hasQuery = Boolean(String(form.symbol || "").trim());
 
   useEffect(() => {
     if (!open) return;
@@ -34,6 +39,8 @@ export default function PortfolioPositionModal({
         purchase_date: String(initialValue.purchase_date ?? initialValue.purchaseDate ?? ""),
       });
       setSelectedName(String(initialValue.company || ""));
+      setHighlightedIndex(-1);
+      setIsDropdownOpen(false);
       return;
     }
     setForm({
@@ -43,6 +50,8 @@ export default function PortfolioPositionModal({
     setSelectedName("");
     setSuggestions([]);
     setLookupState("idle");
+    setHighlightedIndex(-1);
+    setIsDropdownOpen(false);
   }, [open, initialValue]);
 
   const setField = (key, value) => {
@@ -51,19 +60,55 @@ export default function PortfolioPositionModal({
     if (key === "symbol") {
       setSelectedName("");
       setLookupState("idle");
+      setHighlightedIndex(-1);
+      setSuggestions([]);
+      setLookupLoading(Boolean(String(value || "").trim()));
+      setIsDropdownOpen(Boolean(String(value || "").trim()));
     }
   };
+
+  const selectSuggestion = (item) => {
+    setForm((prev) => ({ ...prev, symbol: String(item?.symbol || "").toUpperCase() }));
+    setSelectedName(String(item?.name || ""));
+    setSuggestions([]);
+    setLookupState("verified");
+    setHighlightedIndex(-1);
+    setIsDropdownOpen(false);
+    setError("");
+  };
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const handlePointerDownOutside = (event) => {
+      if (!lookupContainerRef.current) return;
+      if (lookupContainerRef.current.contains(event.target)) return;
+      setIsDropdownOpen(false);
+    };
+
+    document.addEventListener("mousedown", handlePointerDownOutside);
+    document.addEventListener("touchstart", handlePointerDownOutside);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDownOutside);
+      document.removeEventListener("touchstart", handlePointerDownOutside);
+    };
+  }, [open]);
 
   useEffect(() => {
     const q = String(form.symbol || "").trim();
     if (!open || q.length < 1) {
       setSuggestions([]);
       setLookupState("idle");
+      setLookupLoading(false);
+      setHighlightedIndex(-1);
+      setIsDropdownOpen(false);
       return undefined;
     }
 
     const timer = setTimeout(async () => {
       setLookupLoading(true);
+      setIsDropdownOpen(true);
       try {
         const items = await onLookup(q);
         setSuggestions(Array.isArray(items) ? items : []);
@@ -72,14 +117,18 @@ export default function PortfolioPositionModal({
           setLookupState("verified");
           const exact = items.find((item) => String(item?.symbol || "").toUpperCase() === normalized);
           setSelectedName(String(exact?.name || ""));
+          setHighlightedIndex(items.findIndex((item) => String(item?.symbol || "").toUpperCase() === normalized));
         } else if ((items || []).length > 0) {
           setLookupState("typing");
+          setHighlightedIndex(0);
         } else {
           setLookupState("not_found");
+          setHighlightedIndex(-1);
         }
       } catch (_err) {
         setSuggestions([]);
         setLookupState("manual");
+        setHighlightedIndex(-1);
       } finally {
         setLookupLoading(false);
       }
@@ -88,10 +137,22 @@ export default function PortfolioPositionModal({
     return () => clearTimeout(timer);
   }, [form.symbol, onLookup, open]);
 
+  useEffect(() => {
+    if (!isDropdownOpen) return;
+    if (suggestions.length === 0) {
+      setHighlightedIndex(-1);
+      return;
+    }
+    setHighlightedIndex((prev) => {
+      if (prev >= 0 && prev < suggestions.length) return prev;
+      return 0;
+    });
+  }, [isDropdownOpen, suggestions]);
+
   const validationBadge = useMemo(() => {
     if (!String(form.symbol || "").trim()) return null;
     if (lookupLoading) {
-      return { label: "Checking...", className: dark ? "bg-slate-800 text-slate-200" : "bg-slate-100 text-slate-700" };
+      return { label: "Searching...", className: dark ? "bg-slate-800 text-slate-200" : "bg-slate-100 text-slate-700" };
     }
     if (lookupState === "verified") {
       return { label: "✔ Verified", className: "bg-emerald-100 text-emerald-700" };
@@ -132,6 +193,45 @@ export default function PortfolioPositionModal({
     }
   };
 
+  const handleSymbolKeyDown = (e) => {
+    if (!isDropdownOpen) {
+      if (e.key === "ArrowDown" && hasQuery) {
+        e.preventDefault();
+        setIsDropdownOpen(true);
+        if (suggestions.length > 0) setHighlightedIndex((prev) => (prev >= 0 ? prev : 0));
+      }
+      return;
+    }
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!suggestions.length) return;
+      setHighlightedIndex((prev) => (prev + 1) % suggestions.length);
+      return;
+    }
+
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!suggestions.length) return;
+      setHighlightedIndex((prev) => (prev <= 0 ? suggestions.length - 1 : prev - 1));
+      return;
+    }
+
+    if (e.key === "Enter" && isDropdownOpen && suggestions.length > 0 && highlightedIndex >= 0) {
+      e.preventDefault();
+      selectSuggestion(suggestions[highlightedIndex]);
+      return;
+    }
+
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setIsDropdownOpen(false);
+      setHighlightedIndex(-1);
+    }
+  };
+
+  const showDropdown = isDropdownOpen && Boolean(String(form.symbol || "").trim());
+
   if (!open) return null;
 
   return (
@@ -145,33 +245,50 @@ export default function PortfolioPositionModal({
         <form onSubmit={handleSubmit} className="px-6 pb-6 space-y-4">
           <div>
             <label className="text-sm font-semibold">Stock Symbol</label>
-            <div className="relative mt-1">
+            <div ref={lookupContainerRef} className="relative mt-1">
               <input
+                ref={inputRef}
                 value={form.symbol}
                 onChange={(e) => setField("symbol", e.target.value)}
-                className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} w-full rounded-xl border px-4 py-2.5 font-semibold uppercase`}
+                onFocus={() => {
+                  if (hasQuery) setIsDropdownOpen(true);
+                }}
+                onKeyDown={handleSymbolKeyDown}
+                className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} w-full rounded-xl border px-4 py-2.5 font-semibold`}
                 placeholder="AAPL, TSM, ASML"
                 autoComplete="off"
               />
-              {suggestions.length ? (
+              {showDropdown ? (
                 <div className={`absolute z-20 mt-2 w-full rounded-xl border shadow-xl overflow-hidden ${dark ? "bg-slate-950 border-slate-800" : "bg-white border-slate-200"}`}>
-                  {suggestions.map((item) => (
-                    <button
-                      key={`${item.symbol}-${item.exchange || ""}`}
-                      type="button"
-                      onClick={() => {
-                        setForm((prev) => ({ ...prev, symbol: String(item.symbol || "").toUpperCase() }));
-                        setSelectedName(String(item.name || ""));
-                        setSuggestions([]);
-                        setLookupState("verified");
-                        setError("");
-                      }}
-                      className={`w-full px-4 py-3 text-left text-sm ${dark ? "text-slate-200 hover:bg-slate-900" : "text-slate-700 hover:bg-slate-50"}`}
-                    >
-                      <span className="font-semibold">{item.symbol}</span>
-                      <span className="text-slate-500"> — {item.name}</span>
-                    </button>
-                  ))}
+                  {lookupLoading ? (
+                    <div className={`px-4 py-3 text-sm ${dark ? "text-slate-300" : "text-slate-500"}`}>Searching...</div>
+                  ) : suggestions.length ? (
+                    suggestions.map((item, index) => {
+                      const active = index === highlightedIndex;
+                      return (
+                        <button
+                          key={`${item.symbol}-${item.exchange || ""}`}
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => selectSuggestion(item)}
+                          className={`w-full px-4 py-3 text-left text-sm ${
+                            active
+                              ? dark
+                                ? "bg-slate-800 text-slate-100"
+                                : "bg-slate-100 text-slate-900"
+                              : dark
+                                ? "text-slate-200 hover:bg-slate-900"
+                                : "text-slate-700 hover:bg-slate-50"
+                          }`}
+                        >
+                          <span className="font-semibold">{item.symbol}</span>
+                          <span className="text-slate-500"> — {item.name || "Unknown Company"}{item.exchange ? ` — ${item.exchange}` : ""}</span>
+                        </button>
+                      );
+                    })
+                  ) : lookupState === "not_found" || lookupState === "manual" || lookupState === "typing" ? (
+                    <div className={`px-4 py-3 text-sm ${dark ? "text-slate-300" : "text-slate-500"}`}>No results found</div>
+                  ) : null}
                 </div>
               ) : null}
             </div>

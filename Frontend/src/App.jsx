@@ -1321,6 +1321,20 @@ const SearchPage = ({ watchlist = [], onToggleWatchlist = () => {}, recentSearch
   const [marketSentimentScore, setMarketSentimentScore] = useState(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
 
+  const lookupStocks = useCallback(async (rawQuery) => {
+    const q = String(rawQuery || "").trim();
+    if (!q) return [];
+    const result = await fetchJsonWithRetry(
+      [
+        apiUrl(`/api/stocks/search?q=${encodeURIComponent(q)}`),
+        localFastapiUrl(`/api/stocks/search?q=${encodeURIComponent(q)}`),
+      ],
+      1,
+      10000
+    );
+    return Array.isArray(result) ? result : [];
+  }, []);
+
   const seedSymbols = useMemo(
     () => normalizeSymbolList([...(recentSearches || []), ...(watchlist || [])]),
     [recentSearches, watchlist]
@@ -1540,6 +1554,7 @@ const SearchPage = ({ watchlist = [], onToggleWatchlist = () => {}, recentSearch
         setQuery={setQuery}
         onSearch={handleSearch}
         suggestions={suggestions}
+        onLookup={lookupStocks}
         onPick={(symbol) => {
           onRecordSearch(symbol);
           navigate(`/stock/${symbol}`);

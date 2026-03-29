@@ -1115,9 +1115,148 @@ def _search_stock_suggestions(query: str, limit: int = 8) -> List[Dict[str, Any]
     q = str(query or "").strip()
     if len(q) < 1:
         return []
+    result_limit = max(1, min(int(limit or 5), 5))
+    q_lower = q.lower()
+    q_upper = q.upper()
+    q_compact = re.sub(r"[^a-z0-9]+", "", q_lower)
+    normalized_query = re.sub(r"[^a-z0-9]+", " ", q_lower).strip()
+    query_tokens = [token for token in normalized_query.split() if token]
+    query_token_set = set(query_tokens)
+    semantic_theme_map = {
+        "artificial intelligence": ["NVDA", "AMD", "TSM", "MSFT", "GOOGL"],
+        "ai": ["NVDA", "AMD", "TSM", "MSFT", "GOOGL"],
+        "ai chips": ["NVDA", "AMD", "TSM", "ASML", "AVGO"],
+        "ai infrastructure": ["NVDA", "AMD", "TSM", "AVGO", "MSFT"],
+        "ai cloud": ["MSFT", "AMZN", "GOOGL", "ORCL"],
+        "chip": ["NVDA", "AMD", "TSM", "AVGO", "QCOM"],
+        "chips": ["NVDA", "AMD", "TSM", "AVGO", "QCOM"],
+        "chipmaker": ["NVDA", "AMD", "TSM", "ASML", "AVGO"],
+        "chipmakers": ["NVDA", "AMD", "TSM", "ASML", "AVGO"],
+        "semiconductor": ["NVDA", "AMD", "TSM", "ASML", "AVGO"],
+        "semiconductors": ["NVDA", "AMD", "TSM", "ASML", "AVGO"],
+        "semi": ["NVDA", "AMD", "TSM", "ASML"],
+        "gpu": ["NVDA", "AMD"],
+        "gpus": ["NVDA", "AMD"],
+        "cloud": ["MSFT", "AMZN", "GOOGL", "ORCL", "CRM"],
+        "cloud stocks": ["MSFT", "AMZN", "GOOGL", "ORCL", "CRM"],
+        "software cloud": ["MSFT", "AMZN", "CRM", "ORCL"],
+        "oil": ["XOM", "CVX", "COP", "SLB"],
+        "oil companies": ["XOM", "CVX", "COP", "SLB"],
+        "oil stocks": ["XOM", "CVX", "COP", "SLB"],
+        "energy": ["XOM", "CVX", "COP", "SLB"],
+        "energy stocks": ["XOM", "CVX", "COP", "SLB"],
+        "defense": ["LMT", "NOC", "RTX", "GD"],
+        "defense stocks": ["LMT", "NOC", "RTX", "GD"],
+        "cybersecurity": ["CRWD", "PANW", "ZS", "FTNT"],
+        "cyber security": ["CRWD", "PANW", "ZS", "FTNT"],
+        "payments": ["V", "MA", "PYPL", "SQ"],
+        "consumer staples": ["PG", "KO", "PEP", "WMT"],
+        "utilities": ["NEE", "SO", "DUK", "AEP"],
+    }
+    semantic_token_map = {
+        "ai": ["NVDA", "AMD", "TSM", "MSFT"],
+        "artificial": ["NVDA", "AMD", "TSM", "MSFT"],
+        "chips": ["NVDA", "AMD", "TSM", "ASML"],
+        "chip": ["NVDA", "AMD", "TSM", "ASML"],
+        "semi": ["NVDA", "AMD", "TSM", "ASML"],
+        "semiconductor": ["NVDA", "AMD", "TSM", "ASML"],
+        "semiconductors": ["NVDA", "AMD", "TSM", "ASML"],
+        "gpu": ["NVDA", "AMD"],
+        "gpus": ["NVDA", "AMD"],
+        "cloud": ["MSFT", "AMZN", "GOOGL", "ORCL"],
+        "software": ["MSFT", "CRM", "ORCL"],
+        "oil": ["XOM", "CVX", "COP", "SLB"],
+        "energy": ["XOM", "CVX", "COP", "SLB"],
+        "defense": ["LMT", "NOC", "RTX"],
+        "cybersecurity": ["CRWD", "PANW", "ZS"],
+        "cyber": ["CRWD", "PANW", "ZS"],
+        "payment": ["V", "MA", "PYPL"],
+        "payments": ["V", "MA", "PYPL"],
+        "utility": ["NEE", "SO", "DUK"],
+        "utilities": ["NEE", "SO", "DUK"],
+    }
+    semantic_ticker_meta = {
+        "NVDA": {"name": "NVIDIA Corporation", "exchange": "NASDAQ"},
+        "AMD": {"name": "Advanced Micro Devices, Inc.", "exchange": "NASDAQ"},
+        "MSFT": {"name": "Microsoft Corporation", "exchange": "NASDAQ"},
+        "GOOGL": {"name": "Alphabet Inc.", "exchange": "NASDAQ"},
+        "TSM": {"name": "Taiwan Semiconductor Manufacturing Company Limited", "exchange": "NYSE"},
+        "ASML": {"name": "ASML Holding N.V.", "exchange": "NASDAQ"},
+        "AVGO": {"name": "Broadcom Inc.", "exchange": "NASDAQ"},
+        "XOM": {"name": "Exxon Mobil Corporation", "exchange": "NYSE"},
+        "CVX": {"name": "Chevron Corporation", "exchange": "NYSE"},
+        "SLB": {"name": "Schlumberger Limited", "exchange": "NYSE"},
+        "COP": {"name": "ConocoPhillips", "exchange": "NYSE"},
+        "AMZN": {"name": "Amazon.com, Inc.", "exchange": "NASDAQ"},
+        "CRM": {"name": "Salesforce, Inc.", "exchange": "NYSE"},
+        "ORCL": {"name": "Oracle Corporation", "exchange": "NYSE"},
+        "QCOM": {"name": "QUALCOMM Incorporated", "exchange": "NASDAQ"},
+        "LMT": {"name": "Lockheed Martin Corporation", "exchange": "NYSE"},
+        "NOC": {"name": "Northrop Grumman Corporation", "exchange": "NYSE"},
+        "RTX": {"name": "RTX Corporation", "exchange": "NYSE"},
+        "GD": {"name": "General Dynamics Corporation", "exchange": "NYSE"},
+        "CRWD": {"name": "CrowdStrike Holdings, Inc.", "exchange": "NASDAQ"},
+        "PANW": {"name": "Palo Alto Networks, Inc.", "exchange": "NASDAQ"},
+        "ZS": {"name": "Zscaler, Inc.", "exchange": "NASDAQ"},
+        "FTNT": {"name": "Fortinet, Inc.", "exchange": "NASDAQ"},
+        "V": {"name": "Visa Inc.", "exchange": "NYSE"},
+        "MA": {"name": "Mastercard Incorporated", "exchange": "NYSE"},
+        "PYPL": {"name": "PayPal Holdings, Inc.", "exchange": "NASDAQ"},
+        "SQ": {"name": "Block, Inc.", "exchange": "NYSE"},
+        "PG": {"name": "The Procter & Gamble Company", "exchange": "NYSE"},
+        "KO": {"name": "The Coca-Cola Company", "exchange": "NYSE"},
+        "PEP": {"name": "PepsiCo, Inc.", "exchange": "NASDAQ"},
+        "WMT": {"name": "Walmart Inc.", "exchange": "NYSE"},
+        "NEE": {"name": "NextEra Energy, Inc.", "exchange": "NYSE"},
+        "SO": {"name": "The Southern Company", "exchange": "NYSE"},
+        "DUK": {"name": "Duke Energy Corporation", "exchange": "NYSE"},
+        "AEP": {"name": "American Electric Power Company, Inc.", "exchange": "NASDAQ"},
+    }
+    global_priority_symbols = {
+        "TSM", "ASML", "SAP", "BABA", "NVO", "TM", "SONY", "SHEL", "ARM",
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "GOOG", "META", "TSLA",
+    }
+    priority_exchange_tokens = {
+        "NASDAQ", "NYSE", "AMEX", "NYSE ARCA", "ARCA", "BATS", "NMS", "NYQ", "ASE",
+    }
+    low_relevance_exchange_tokens = {
+        "SZ", "SH", "SSE", "SZSE", "HK", "HKEX", "HKG", "XHKG",
+        "PA", "PAR", "XPAR", "DE", "ETR", "FRA", "XETR",
+        "MC", "XMAD", "MI", "XMIL", "BR", "XBRU", "ST", "XSTO",
+        "SWX", "LSE", "XLON", "VIE", "XWBO",
+    }
 
     collected: List[Dict[str, Any]] = []
     seen: set[str] = set()
+
+    def _semantic_symbols() -> Dict[str, int]:
+        matched: Dict[str, int] = {}
+
+        def _boost(symbols: List[str], amount: int) -> None:
+            for symbol in symbols:
+                matched[symbol] = max(matched.get(symbol, 0), amount)
+
+        for key, symbols in semantic_theme_map.items():
+            key_lower = key.lower()
+            key_tokens = [token for token in re.sub(r"[^a-z0-9]+", " ", key_lower).split() if token]
+            exact_phrase = key_lower == normalized_query
+            phrase_contains = bool(normalized_query) and key_lower in normalized_query
+            all_tokens_match = bool(key_tokens) and all(token in query_token_set for token in key_tokens)
+            partial_theme_match = bool(query_tokens) and any(token in key_lower for token in query_tokens)
+
+            if exact_phrase:
+                _boost(symbols, 130)
+            elif phrase_contains or all_tokens_match:
+                _boost(symbols, 115)
+            elif partial_theme_match:
+                _boost(symbols, 100)
+
+        for token in query_tokens:
+            token_symbols = semantic_token_map.get(token)
+            if token_symbols:
+                _boost(token_symbols, 100)
+
+        return matched
 
     def _push(items: List[Dict[str, Any]]) -> None:
         for item in items or []:
@@ -1131,15 +1270,17 @@ def _search_stock_suggestions(query: str, limit: int = 8) -> List[Dict[str, Any]
                     "name": str(item.get("name") or symbol),
                     "exchange": str(item.get("exchange") or ""),
                     "type": str(item.get("type") or ""),
+                    "marketCap": safe_float(item.get("marketCap")) or 0.0,
+                    "semanticBoost": int(item.get("semanticBoost") or 0),
                     "source": str(item.get("source") or ""),
                 }
             )
-            if len(collected) >= limit:
+            if len(collected) >= max(result_limit * 4, 20):
                 return
 
     try:
         if FMP_API_KEY:
-            payload = _fmp_get("/search", {"query": q, "limit": limit})
+            payload = _fmp_get("/search", {"query": q, "limit": max(result_limit * 4, 20)})
             fmp_items = []
             for row in payload or []:
                 symbol = normalize_symbol(row.get("symbol"))
@@ -1151,6 +1292,7 @@ def _search_stock_suggestions(query: str, limit: int = 8) -> List[Dict[str, Any]
                         "name": row.get("name") or row.get("companyName") or symbol,
                         "exchange": row.get("exchangeShortName") or row.get("stockExchange") or "",
                         "type": row.get("type") or "",
+                        "marketCap": safe_float(row.get("marketCap")) or 0.0,
                         "source": "fmp",
                     }
                 )
@@ -1159,7 +1301,7 @@ def _search_stock_suggestions(query: str, limit: int = 8) -> List[Dict[str, Any]
         pass
 
     try:
-        if len(collected) < limit and FINNHUB_API_KEY:
+        if len(collected) < max(result_limit * 2, 10) and FINNHUB_API_KEY:
             payload = _finnhub_get("/search", {"q": q})
             fh_items = []
             for row in payload.get("result", []) if isinstance(payload, dict) else []:
@@ -1172,6 +1314,7 @@ def _search_stock_suggestions(query: str, limit: int = 8) -> List[Dict[str, Any]
                         "name": row.get("description") or symbol,
                         "exchange": row.get("type") or "",
                         "type": row.get("type") or "",
+                        "marketCap": 0.0,
                         "source": "finnhub",
                     }
                 )
@@ -1180,23 +1323,129 @@ def _search_stock_suggestions(query: str, limit: int = 8) -> List[Dict[str, Any]
         pass
 
     try:
-        if len(collected) < limit:
-            _push(_yahoo_search(q, limit=limit))
+        if len(collected) < max(result_limit * 2, 10):
+            _push(_yahoo_search(q, limit=max(result_limit * 4, 20)))
     except Exception:
         pass
 
-    def _rank(item: Dict[str, Any]) -> tuple:
-        symbol = str(item.get("symbol") or "")
+    semantic_matches = _semantic_symbols()
+    if semantic_matches:
+        symbol_to_index = {str(item.get("symbol") or "").upper(): idx for idx, item in enumerate(collected)}
+        for symbol, semantic_boost in semantic_matches.items():
+            if symbol in symbol_to_index:
+                idx = symbol_to_index[symbol]
+                collected[idx]["semanticBoost"] = max(semantic_boost, int(collected[idx].get("semanticBoost") or 0))
+                source = str(collected[idx].get("source") or "")
+                collected[idx]["source"] = f"{source},semantic" if source and "semantic" not in source else (source or "semantic")
+            else:
+                meta = semantic_ticker_meta.get(symbol, {})
+                collected.append(
+                    {
+                        "symbol": symbol,
+                        "name": str(meta.get("name") or symbol),
+                        "exchange": str(meta.get("exchange") or ""),
+                        "type": "semantic",
+                        "marketCap": 0.0,
+                        "semanticBoost": semantic_boost,
+                        "source": "semantic",
+                    }
+                )
+
+    def _normalized_name(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+    def _compact_name(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+    def _normalized_exchange(value: str) -> str:
+        return re.sub(r"[^A-Z0-9]+", " ", str(value or "").upper()).strip()
+
+    def _exchange_adjustment(symbol: str, exchange: str) -> int:
+        if symbol in global_priority_symbols:
+            return 0
+        normalized_exchange = _normalized_exchange(exchange)
+        if not normalized_exchange:
+            return 0
+        if normalized_exchange in priority_exchange_tokens:
+            return 30
+        if any(token == normalized_exchange or token in normalized_exchange.split() for token in low_relevance_exchange_tokens):
+            return -50
+        if any(token in normalized_exchange for token in priority_exchange_tokens):
+            return 30
+        if any(token in normalized_exchange for token in low_relevance_exchange_tokens):
+            return -50
+        return 0
+
+    def _matches(item: Dict[str, Any]) -> bool:
+        symbol = str(item.get("symbol") or "").upper()
         name = str(item.get("name") or "")
-        q_upper = q.upper()
+        name_lower = name.lower()
+        name_compact = _compact_name(name)
         return (
-            0 if symbol == q_upper else 1 if symbol.startswith(q_upper) else 2 if q_upper in symbol else 3 if q.lower() in name.lower() else 4,
-            len(symbol),
-            symbol,
+            q_upper in symbol
+            or q_lower in name_lower
+            or (q_compact and q_compact in name_compact)
         )
 
-    collected.sort(key=_rank)
-    return collected[:limit]
+    def _score(item: Dict[str, Any]) -> int:
+        symbol = str(item.get("symbol") or "").upper()
+        name = str(item.get("name") or "")
+        exchange = str(item.get("exchange") or "")
+        market_cap = safe_float(item.get("marketCap")) or 0.0
+        semantic_boost = int(item.get("semanticBoost") or 0)
+        name_lower = name.lower()
+        name_compact = _compact_name(name)
+        normalized_words = _normalized_name(name).split()
+
+        exact_symbol = symbol == q_upper
+        symbol_starts = symbol.startswith(q_upper)
+        symbol_contains = q_upper in symbol
+        exact_name = name_lower == q_lower or name_compact == q_compact
+        word_starts = any(word.startswith(q_lower) for word in normalized_words)
+        name_starts = name_lower.startswith(q_lower)
+        name_contains = q_lower in name_lower or (q_compact and q_compact in name_compact)
+
+        score = 0
+        if exact_symbol:
+            score += 120
+        elif symbol_starts:
+            score += 95
+        elif exact_name or name_starts:
+            score += 80
+        elif word_starts:
+            score += 65
+        elif symbol_contains:
+            score += 50
+        elif name_contains:
+            score += 40
+
+        score += semantic_boost
+        score += _exchange_adjustment(symbol, exchange)
+
+        if symbol in global_priority_symbols:
+            score += 20
+
+        if market_cap >= 100_000_000_000:
+            score += 10
+        elif market_cap >= 10_000_000_000:
+            score += 5
+
+        if not exact_symbol and not symbol_starts and not name_starts and not word_starts and name_contains:
+            score -= 20
+
+        return score
+
+    filtered = [item for item in collected if _matches(item)]
+    ranked = filtered if filtered else collected
+    ranked.sort(
+        key=lambda item: (
+            -_score(item),
+            len(str(item.get("symbol") or "")),
+            len(str(item.get("name") or "")),
+            str(item.get("symbol") or ""),
+        )
+    )
+    return ranked[:result_limit]
 
 
 def _fetch_finnhub_candles(symbol: str, range_value: str):
