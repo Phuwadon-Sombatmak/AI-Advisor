@@ -71,10 +71,8 @@ function StockdetailContent() {
 
   if (!stockData) {
     return (
-      <div className="max-w-5xl mx-auto">
-        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-700 font-semibold">
-          Data unavailable for this ticker.
-        </div>
+      <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-700 font-semibold">
+        Data unavailable for this ticker.
       </div>
     );
   }
@@ -105,7 +103,7 @@ function StockdetailContent() {
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in zoom-in duration-500">
+    <div className="space-y-6 animate-in fade-in zoom-in duration-500">
       <button 
         onClick={() => navigate(-1)} 
         className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 font-bold transition-colors"

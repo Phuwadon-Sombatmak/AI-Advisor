@@ -1,6 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { AreaChart, Area, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis, AreaChart, Area, Line, Legend } from "recharts";
 
 const RANGES = ["1M", "3M", "6M", "1Y"];
 
@@ -40,8 +40,24 @@ export default function PortfolioChart({ data = [], range = "1M", onRangeChange 
             <CartesianGrid strokeDasharray="3 3" stroke={dark ? "#1e293b" : "#e2e8f0"} />
             <XAxis dataKey="label" stroke={dark ? "#94a3b8" : "#64748b"} tickLine={false} axisLine={false} />
             <YAxis stroke={dark ? "#94a3b8" : "#64748b"} tickLine={false} axisLine={false} width={60} />
-            <Tooltip />
+            <Tooltip
+              formatter={(value, name) => {
+                const label =
+                  name === "value" ? t("portfolioValue") : name === "benchmark" ? `${t("benchmark")}: SPY` : name;
+                const amount = Number(value || 0).toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                });
+                return [`$${amount}`, label];
+              }}
+            />
+            <Legend
+              formatter={(value) => (value === "value" ? t("portfolioValue") : value === "benchmark" ? `${t("benchmark")}: SPY` : value)}
+            />
             <Area type="monotone" dataKey="value" stroke="#2563EB" fill="url(#portfolioGradient)" strokeWidth={3} />
+            {data.some((row) => Number(row?.benchmark || 0) > 0) ? (
+              <Line type="monotone" dataKey="benchmark" stroke="#F59E0B" strokeWidth={2} dot={false} />
+            ) : null}
           </AreaChart>
         </ResponsiveContainer>
       </div>

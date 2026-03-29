@@ -11,8 +11,8 @@ export default function Topbar({ theme, toggleTheme, languageLabel, toggleLangua
 
   return (
     <header className={`${dark ? "bg-[#020617] border-slate-800" : "bg-white border-slate-200"} h-14 border-b`}>
-      <div className="h-full max-w-[1280px] mx-auto px-4 md:px-8 flex items-center justify-between">
-        <h1 className={`${dark ? "text-slate-100" : "text-slate-800"} text-sm md:text-base font-bold`}>{title}</h1>
+      <div className="h-full max-w-[1400px] mx-auto px-6 flex items-center justify-between min-w-0">
+        <h1 className={`${dark ? "text-slate-100" : "text-slate-800"} text-sm md:text-base font-bold whitespace-nowrap truncate pr-3`}>{title}</h1>
         <div className="flex items-center gap-2">
           <button
             onClick={toggleTheme}

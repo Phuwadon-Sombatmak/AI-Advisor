@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 const EMPTY_FORM = {
   symbol: "",
@@ -7,19 +7,22 @@ const EMPTY_FORM = {
   purchase_date: "",
 };
 
-const SYMBOL_SUGGESTIONS = ["NVDA", "MSFT", "AAPL", "AMZN", "TSLA", "META", "GOOGL", "AMD", "AVGO", "JPM", "XOM", "UNH"];
-
 export default function PortfolioPositionModal({
   open = false,
   mode = "create",
   initialValue = null,
   onClose = () => {},
   onSubmit = async () => {},
+  onLookup = async () => [],
   dark = false,
 }) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupState, setLookupState] = useState("idle");
+  const [selectedName, setSelectedName] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -30,20 +33,77 @@ export default function PortfolioPositionModal({
         average_buy_price: String(initialValue.average_buy_price ?? initialValue.avgPrice ?? ""),
         purchase_date: String(initialValue.purchase_date ?? initialValue.purchaseDate ?? ""),
       });
+      setSelectedName(String(initialValue.company || ""));
       return;
     }
     setForm({
       ...EMPTY_FORM,
       purchase_date: new Date().toISOString().slice(0, 10),
     });
+    setSelectedName("");
+    setSuggestions([]);
+    setLookupState("idle");
   }, [open, initialValue]);
-
-  if (!open) return null;
 
   const setField = (key, value) => {
     setForm((prev) => ({ ...prev, [key]: value }));
     setError("");
+    if (key === "symbol") {
+      setSelectedName("");
+      setLookupState("idle");
+    }
   };
+
+  useEffect(() => {
+    const q = String(form.symbol || "").trim();
+    if (!open || q.length < 1) {
+      setSuggestions([]);
+      setLookupState("idle");
+      return undefined;
+    }
+
+    const timer = setTimeout(async () => {
+      setLookupLoading(true);
+      try {
+        const items = await onLookup(q);
+        setSuggestions(Array.isArray(items) ? items : []);
+        const normalized = q.toUpperCase();
+        if ((items || []).some((item) => String(item?.symbol || "").toUpperCase() === normalized)) {
+          setLookupState("verified");
+          const exact = items.find((item) => String(item?.symbol || "").toUpperCase() === normalized);
+          setSelectedName(String(exact?.name || ""));
+        } else if ((items || []).length > 0) {
+          setLookupState("typing");
+        } else {
+          setLookupState("not_found");
+        }
+      } catch (_err) {
+        setSuggestions([]);
+        setLookupState("manual");
+      } finally {
+        setLookupLoading(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [form.symbol, onLookup, open]);
+
+  const validationBadge = useMemo(() => {
+    if (!String(form.symbol || "").trim()) return null;
+    if (lookupLoading) {
+      return { label: "Checking...", className: dark ? "bg-slate-800 text-slate-200" : "bg-slate-100 text-slate-700" };
+    }
+    if (lookupState === "verified") {
+      return { label: "✔ Verified", className: "bg-emerald-100 text-emerald-700" };
+    }
+    if (lookupState === "manual") {
+      return { label: "⚠ Manual fallback", className: "bg-amber-100 text-amber-700" };
+    }
+    if (lookupState === "not_found") {
+      return { label: "❌ Not found", className: "bg-rose-100 text-rose-700" };
+    }
+    return null;
+  }, [dark, form.symbol, lookupLoading, lookupState]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -60,7 +120,10 @@ export default function PortfolioPositionModal({
 
     setSaving(true);
     try {
-      await onSubmit(payload);
+      const result = await onSubmit(payload);
+      if (result?.validation?.warning) {
+        window.alert(result.validation.warning);
+      }
       onClose();
     } catch (err) {
       setError(String(err?.message || "Failed to save position"));
@@ -68,6 +131,8 @@ export default function PortfolioPositionModal({
       setSaving(false);
     }
   };
+
+  if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-[80] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
@@ -80,18 +145,45 @@ export default function PortfolioPositionModal({
         <form onSubmit={handleSubmit} className="px-6 pb-6 space-y-4">
           <div>
             <label className="text-sm font-semibold">Stock Symbol</label>
-            <input
-              value={form.symbol}
-              onChange={(e) => setField("symbol", e.target.value)}
-              list="portfolio-symbol-suggestions"
-              className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} mt-1 w-full rounded-xl border px-4 py-2.5 font-semibold uppercase`}
-              placeholder="NVDA"
-            />
-            <datalist id="portfolio-symbol-suggestions">
-              {SYMBOL_SUGGESTIONS.map((sym) => (
-                <option value={sym} key={sym} />
-              ))}
-            </datalist>
+            <div className="relative mt-1">
+              <input
+                value={form.symbol}
+                onChange={(e) => setField("symbol", e.target.value)}
+                className={`${dark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"} w-full rounded-xl border px-4 py-2.5 font-semibold uppercase`}
+                placeholder="AAPL, TSM, ASML"
+                autoComplete="off"
+              />
+              {suggestions.length ? (
+                <div className={`absolute z-20 mt-2 w-full rounded-xl border shadow-xl overflow-hidden ${dark ? "bg-slate-950 border-slate-800" : "bg-white border-slate-200"}`}>
+                  {suggestions.map((item) => (
+                    <button
+                      key={`${item.symbol}-${item.exchange || ""}`}
+                      type="button"
+                      onClick={() => {
+                        setForm((prev) => ({ ...prev, symbol: String(item.symbol || "").toUpperCase() }));
+                        setSelectedName(String(item.name || ""));
+                        setSuggestions([]);
+                        setLookupState("verified");
+                        setError("");
+                      }}
+                      className={`w-full px-4 py-3 text-left text-sm ${dark ? "text-slate-200 hover:bg-slate-900" : "text-slate-700 hover:bg-slate-50"}`}
+                    >
+                      <span className="font-semibold">{item.symbol}</span>
+                      <span className="text-slate-500"> — {item.name}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <div className="mt-2 flex items-center gap-2 flex-wrap">
+              {validationBadge ? (
+                <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${validationBadge.className}`}>
+                  {validationBadge.label}
+                </span>
+              ) : null}
+              {selectedName ? <span className="text-xs text-slate-500">{selectedName}</span> : null}
+            </div>
+            <p className="mt-2 text-xs text-slate-500">Supports global tickers. Example: AAPL, TSM, ASML.</p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

@@ -4,6 +4,7 @@ import { ArrowLeft, Loader2, ShieldAlert, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { AuthProvider, AuthContext } from "./Components/AuthContext";
+import AppLayout from "./Components/AppLayout";
 import Sidebar from "./Components/Sidebar";
 import Topbar from "./Components/Topbar";
 import HeroSearch from "./Components/HeroSearch";
@@ -979,10 +980,10 @@ const PrivateLayout = () => {
   if (!user) return <Navigate to="/login" replace />;
 
   return (
-    <div className={`${theme === "dark" ? "bg-[#020617] text-slate-100" : "bg-[#F8FAFC] text-slate-900"} min-h-screen font-sans md:flex`}>
-      <Sidebar pathname={location.pathname} onNavigate={navigate} onLogout={logout} logoutLabel={t("logout")} />
-
-      <main className="flex-1">
+    <AppLayout
+      theme={theme}
+      sidebar={<Sidebar pathname={location.pathname} onNavigate={navigate} onLogout={logout} logoutLabel={t("logout")} />}
+      topbar={
         <Topbar
           theme={theme}
           toggleTheme={toggleTheme}
@@ -990,13 +991,10 @@ const PrivateLayout = () => {
           toggleLanguage={toggleLanguage}
           title={t("welcomeInvestor")}
         />
-        <div className="p-4 md:p-8">
-          <div className="max-w-[1280px] mx-auto">
-            <Outlet />
-          </div>
-        </div>
-      </main>
-    </div>
+      }
+    >
+      <Outlet />
+    </AppLayout>
   );
 };
 const LoginPage = () => {
@@ -2974,10 +2972,16 @@ const PortfolioPage = ({ watchlist = [] }) => {
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState({
     totalValue: 0,
+    dailyChange: 0,
     dailyChangePct: 0,
+    totalGainLoss: 0,
     totalGainPct: 0,
     holdingsCount: 0,
     diversificationScore: 0,
+    portfolioScore: 0,
+    scoreBreakdown: {},
+    benchmark: "SPY",
+    benchmarkReturnPct: 0,
   });
   const [allocation, setAllocation] = useState([]);
   const [sectorExposure, setSectorExposure] = useState([]);
@@ -2987,6 +2991,10 @@ const PortfolioPage = ({ watchlist = [] }) => {
     riskLevel: "Low",
     summary: t("portfolioDiversificationHint"),
     rebalanceSuggestions: [t("rebalanceIncreaseEtf")],
+    scoreBreakdown: {},
+    marketRegime: "Neutral",
+    marketSentiment: "Neutral",
+    actionPlan: { reduce: [], increase: [], rationale: "", targetAllocation: [] },
   });
   const [modalOpen, setModalOpen] = useState(false);
   const [editingRow, setEditingRow] = useState(null);
@@ -3027,6 +3035,7 @@ const PortfolioPage = ({ watchlist = [] }) => {
           ? overview.rows.map((row) => ({
               ...row,
               avgPrice: Number(row.avgPrice || row.average_buy_price || 0),
+              allocationPct: Number(row.allocationPct || ((Number(row.marketValue || 0) / Math.max(Number(overview?.summary?.totalValue || 0), 1)) * 100)),
             }))
           : [];
         setRows(tableRows);
@@ -3038,6 +3047,10 @@ const PortfolioPage = ({ watchlist = [] }) => {
           riskScore: Number(overview?.risk?.score || 0),
           riskLevel: overview?.risk?.level || "Low",
           summary: overview?.insight?.summary || t("portfolioDiversificationHint"),
+          scoreBreakdown: overview?.insight?.scoreBreakdown || overview?.summary?.scoreBreakdown || {},
+          marketRegime: overview?.insight?.marketRegime || overview?.marketContext?.regime || "Neutral",
+          marketSentiment: overview?.insight?.marketSentiment || overview?.marketContext?.sentiment || "Neutral",
+          actionPlan: overview?.actionPlan || { reduce: [], increase: [], rationale: "", targetAllocation: [] },
           rebalanceSuggestions:
             Array.isArray(overview?.insight?.suggestions) && overview.insight.suggestions.length
               ? overview.insight.suggestions
@@ -3048,10 +3061,16 @@ const PortfolioPage = ({ watchlist = [] }) => {
         setRows([]);
         setSummary({
           totalValue: 0,
+          dailyChange: 0,
           dailyChangePct: 0,
+          totalGainLoss: 0,
           totalGainPct: 0,
           holdingsCount: 0,
           diversificationScore: 0,
+          portfolioScore: 0,
+          scoreBreakdown: {},
+          benchmark: "SPY",
+          benchmarkReturnPct: 0,
         });
       } finally {
         setLoading(false);
@@ -3081,6 +3100,7 @@ const PortfolioPage = ({ watchlist = [] }) => {
     const data = await res.json();
     if (!res.ok) throw new Error(data?.detail || "Unable to add position");
     await loadPortfolio(range);
+    return data;
   };
 
   const updatePosition = async (payload) => {
@@ -3093,12 +3113,22 @@ const PortfolioPage = ({ watchlist = [] }) => {
     const data = await res.json();
     if (!res.ok) throw new Error(data?.detail || "Unable to update position");
     await loadPortfolio(range);
+    return data;
   };
 
   const deletePosition = async (row) => {
-    const ok = window.confirm(`Delete ${row.symbol} position?`);
+    const ok = window.confirm(
+      row?.symbol
+        ? `Delete ${row.symbol} lot${row?.purchaseDate ? ` from ${row.purchaseDate}` : ""}?`
+        : "Delete this lot?"
+    );
     if (!ok) return;
-    const res = await fetch(apiUrl(`/api/portfolio/positions/${row.id}`), {
+    const lotId = row?.id;
+    if (!lotId) {
+      alert("Missing lot id");
+      return;
+    }
+    const res = await fetch(apiUrl(`/api/portfolio/positions/${lotId}`), {
       method: "DELETE",
       headers: authHeaders,
     });
@@ -3109,6 +3139,41 @@ const PortfolioPage = ({ watchlist = [] }) => {
     }
     await loadPortfolio(range);
   };
+
+  const deleteAllLots = async (row) => {
+    const lots = Array.isArray(row?.lots) ? row.lots.filter((lot) => lot?.id) : [];
+    if (!lots.length) {
+      alert("No lots available to delete");
+      return;
+    }
+    for (const lot of lots) {
+      const res = await fetch(apiUrl(`/api/portfolio/positions/${lot.id}`), {
+        method: "DELETE",
+        headers: authHeaders,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data?.detail || "Delete failed");
+        return;
+      }
+    }
+    await loadPortfolio(range);
+  };
+
+  const lookupStocks = useCallback(async (query) => {
+    const q = String(query || "").trim();
+    if (!q) return [];
+    const result = await fetchJsonWithRetry(
+      [
+        apiUrl(`/api/stocks/search?q=${encodeURIComponent(q)}`),
+        localFastapiUrl(`/api/stocks/search?q=${encodeURIComponent(q)}`),
+      ],
+      1,
+      10000,
+      { method: "GET", headers: authHeaders }
+    );
+    return Array.isArray(result) ? result : [];
+  }, [authHeaders]);
 
   if (!hasToken) {
     return (
@@ -3150,7 +3215,7 @@ const PortfolioPage = ({ watchlist = [] }) => {
 
       <div className="grid grid-cols-1 xl:grid-cols-[2fr,1fr] gap-5">
         <PortfolioChart data={performanceData} range={range} onRangeChange={setRange} dark={dark} />
-        <AllocationChart allocation={allocation} sectorExposure={sectorExposure} dark={dark} />
+        <AllocationChart allocation={allocation} sectorExposure={sectorExposure} dark={dark} language={i18n.language} />
       </div>
 
       {loading ? (
@@ -3182,6 +3247,7 @@ const PortfolioPage = ({ watchlist = [] }) => {
             setModalOpen(true);
           }}
           onDelete={deletePosition}
+          onDeleteAll={deleteAllLots}
         />
       )}
 
@@ -3192,6 +3258,7 @@ const PortfolioPage = ({ watchlist = [] }) => {
         mode={editingRow ? "edit" : "create"}
         initialValue={editingRow}
         dark={dark}
+        onLookup={lookupStocks}
         onClose={() => {
           setModalOpen(false);
           setEditingRow(null);

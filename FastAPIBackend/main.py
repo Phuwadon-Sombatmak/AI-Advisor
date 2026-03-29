@@ -1074,6 +1074,131 @@ def _fmp_get(path: str, params: Optional[Dict[str, Any]] = None):
     return res.json()
 
 
+def _yahoo_search(query: str, limit: int = 8) -> List[Dict[str, Any]]:
+    q = str(query or "").strip()
+    if not q:
+        return []
+    res = session.get(
+        "https://query2.finance.yahoo.com/v1/finance/search",
+        params={
+            "q": q,
+            "quotesCount": max(3, min(int(limit or 8), 12)),
+            "newsCount": 0,
+            "enableFuzzyQuery": "true",
+            "quotesQueryId": "tss_match_phrase_query",
+        },
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=12,
+    )
+    if res.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Yahoo search upstream error ({res.status_code})")
+    payload = res.json()
+    quotes = payload.get("quotes") if isinstance(payload, dict) else []
+    items: List[Dict[str, Any]] = []
+    for row in quotes or []:
+        symbol = normalize_symbol(row.get("symbol"))
+        if not symbol:
+            continue
+        items.append(
+            {
+                "symbol": symbol,
+                "name": row.get("shortname") or row.get("longname") or row.get("symbol") or symbol,
+                "exchange": row.get("exchDisp") or row.get("exchange") or "",
+                "type": row.get("quoteType") or "",
+                "source": "yahoo",
+            }
+        )
+    return items
+
+
+def _search_stock_suggestions(query: str, limit: int = 8) -> List[Dict[str, Any]]:
+    q = str(query or "").strip()
+    if len(q) < 1:
+        return []
+
+    collected: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _push(items: List[Dict[str, Any]]) -> None:
+        for item in items or []:
+            symbol = normalize_symbol(item.get("symbol"))
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            collected.append(
+                {
+                    "symbol": symbol,
+                    "name": str(item.get("name") or symbol),
+                    "exchange": str(item.get("exchange") or ""),
+                    "type": str(item.get("type") or ""),
+                    "source": str(item.get("source") or ""),
+                }
+            )
+            if len(collected) >= limit:
+                return
+
+    try:
+        if FMP_API_KEY:
+            payload = _fmp_get("/search", {"query": q, "limit": limit})
+            fmp_items = []
+            for row in payload or []:
+                symbol = normalize_symbol(row.get("symbol"))
+                if not symbol:
+                    continue
+                fmp_items.append(
+                    {
+                        "symbol": symbol,
+                        "name": row.get("name") or row.get("companyName") or symbol,
+                        "exchange": row.get("exchangeShortName") or row.get("stockExchange") or "",
+                        "type": row.get("type") or "",
+                        "source": "fmp",
+                    }
+                )
+            _push(fmp_items)
+    except Exception:
+        pass
+
+    try:
+        if len(collected) < limit and FINNHUB_API_KEY:
+            payload = _finnhub_get("/search", {"q": q})
+            fh_items = []
+            for row in payload.get("result", []) if isinstance(payload, dict) else []:
+                symbol = normalize_symbol(row.get("symbol"))
+                if not symbol:
+                    continue
+                fh_items.append(
+                    {
+                        "symbol": symbol,
+                        "name": row.get("description") or symbol,
+                        "exchange": row.get("type") or "",
+                        "type": row.get("type") or "",
+                        "source": "finnhub",
+                    }
+                )
+            _push(fh_items)
+    except Exception:
+        pass
+
+    try:
+        if len(collected) < limit:
+            _push(_yahoo_search(q, limit=limit))
+    except Exception:
+        pass
+
+    def _rank(item: Dict[str, Any]) -> tuple:
+        symbol = str(item.get("symbol") or "")
+        name = str(item.get("name") or "")
+        q_upper = q.upper()
+        return (
+            0 if symbol == q_upper else 1 if symbol.startswith(q_upper) else 2 if q_upper in symbol else 3 if q.lower() in name.lower() else 4,
+            len(symbol),
+            symbol,
+        )
+
+    collected.sort(key=_rank)
+    return collected[:limit]
+
+
 def _fetch_finnhub_candles(symbol: str, range_value: str):
     params = _history_params(range_value)
     now = datetime.utcnow()
@@ -2868,6 +2993,56 @@ def _portfolio_profile_defaults(symbol: str) -> Dict[str, Any]:
     }
 
 
+def _validate_portfolio_symbol(symbol: str) -> Dict[str, Any]:
+    sym = str(symbol or "").upper().strip()
+    if not sym:
+        return {"ok": False, "reason": "missing_symbol", "message": "Ticker not found"}
+
+    provider_errors: List[str] = []
+
+    try:
+        quote = _get_portfolio_quote(sym)
+        if safe_float(quote.get("price")) > 0:
+            return {"ok": True, "mode": "live_quote", "warning": None}
+    except Exception as e:
+        provider_errors.append(f"quote:{e}")
+
+    try:
+        yf_symbol = _alternate_quote_symbols(sym)[0] if _alternate_quote_symbols(sym) else sym
+        ticker = yf.Ticker(yf_symbol)
+        history = ticker.history(period="1mo", interval="1d", auto_adjust=False, actions=False)
+        if history is not None and not history.empty:
+            closes = pd.to_numeric(history.get("Close"), errors="coerce") if "Close" in history else None
+            if closes is not None and closes.dropna().shape[0] > 0:
+                return {"ok": True, "mode": "yfinance_history", "warning": None}
+    except Exception as e:
+        provider_errors.append(f"yfinance_history:{e}")
+
+    try:
+        yf_symbol = _alternate_quote_symbols(sym)[0] if _alternate_quote_symbols(sym) else sym
+        ticker = yf.Ticker(yf_symbol)
+        info = {}
+        try:
+            info = ticker.get_info() or {}
+        except Exception:
+            info = ticker.info or {}
+        if any(info.get(key) for key in ["longName", "shortName", "symbol", "quoteType"]):
+            return {"ok": True, "mode": "yfinance_profile", "warning": None}
+    except Exception as e:
+        provider_errors.append(f"yfinance_info:{e}")
+
+    if provider_errors:
+        unavailable_count = sum(1 for err in provider_errors if any(tag in err.lower() for tag in ["timeout", "connection", "429", "401", "403", "quote:", "yfinance_"]))
+        if unavailable_count == len(provider_errors):
+            return {
+                "ok": True,
+                "mode": "manual_fallback",
+                "warning": "Could not verify ticker with live providers. Saved as manual entry; market data will populate when available.",
+            }
+
+    return {"ok": False, "reason": "not_found", "message": "Ticker not found"}
+
+
 def _get_portfolio_profile(symbol: str) -> Dict[str, Any]:
     sym = str(symbol or "").upper().strip()
     cached = portfolio_meta_cache.get(sym)
@@ -2892,7 +3067,20 @@ def _get_portfolio_profile(symbol: str) -> Dict[str, Any]:
                 "beta": 1.0,
             }
         except Exception:
-            pass
+            try:
+                ticker = yf.Ticker(sym)
+                info = {}
+                try:
+                    info = ticker.get_info() or {}
+                except Exception:
+                    info = ticker.info or {}
+                profile = {
+                    "company": info.get("longName") or info.get("shortName") or info.get("symbol") or sym,
+                    "sector": info.get("sector") or info.get("industry") or "Other",
+                    "beta": safe_float(info.get("beta")) or 1.0,
+                }
+            except Exception:
+                pass
 
     portfolio_meta_cache[sym] = {"ts": time.time(), "data": profile}
     return profile
@@ -3758,6 +3946,157 @@ def _portfolio_range_to_stock_range(range_value: str) -> str:
     return "1y"
 
 
+PORTFOLIO_ACTION_SYMBOLS = {
+    "Technology": "MSFT",
+    "Energy": "XOM",
+    "Utilities": "XLU",
+    "Healthcare": "XLV",
+    "Consumer Defensive": "XLP",
+    "Financials": "JPM",
+    "Industrials": "XLI",
+    "Cash": "SHY",
+    "Other": "SPY",
+}
+
+
+def _normalize_portfolio_sector(raw_sector: Any) -> str:
+    sector = str(raw_sector or "Other").strip()
+    mapping = {
+        "Technology": "Technology",
+        "Information Technology": "Technology",
+        "Semiconductors": "Technology",
+        "Energy": "Energy",
+        "Utilities": "Utilities",
+        "Healthcare": "Healthcare",
+        "Health Care": "Healthcare",
+        "Consumer Defensive": "Consumer Defensive",
+        "Consumer Staples": "Consumer Defensive",
+        "Financial": "Financials",
+        "Financial Services": "Financials",
+        "Banks": "Financials",
+        "Industrials": "Industrials",
+        "Industrial Goods": "Industrials",
+        "Cash": "Cash",
+    }
+    return mapping.get(sector, sector if sector else "Other")
+
+
+def generate_target_allocation(regime: str) -> Dict[str, Any]:
+    normalized = str(regime or "Neutral").strip()
+    if normalized == "Risk-Off":
+        targets = {
+            "Technology": 25.0,
+            "Energy": 20.0,
+            "Utilities": 15.0,
+            "Healthcare": 15.0,
+            "Consumer Defensive": 10.0,
+            "Financials": 5.0,
+            "Industrials": 0.0,
+            "Cash": 10.0,
+        }
+    elif normalized == "Risk-On":
+        targets = {
+            "Technology": 35.0,
+            "Energy": 10.0,
+            "Utilities": 5.0,
+            "Healthcare": 10.0,
+            "Consumer Defensive": 5.0,
+            "Financials": 10.0,
+            "Industrials": 15.0,
+            "Cash": 10.0,
+        }
+    else:
+        targets = {
+            "Technology": 28.0,
+            "Energy": 14.0,
+            "Utilities": 10.0,
+            "Healthcare": 12.0,
+            "Consumer Defensive": 8.0,
+            "Financials": 10.0,
+            "Industrials": 8.0,
+            "Cash": 10.0,
+        }
+    return {"regime": normalized, "targets": targets}
+
+
+def generate_rebalance_plan(portfolio: List[Dict[str, Any]], market_context: Dict[str, Any]) -> Dict[str, Any]:
+    regime = str(market_context.get("regime") or "Neutral")
+    target_allocation = generate_target_allocation(regime)
+    targets = dict(target_allocation.get("targets") or {})
+
+    sector_actuals: Dict[str, float] = defaultdict(float)
+    for row in portfolio:
+        sector = _normalize_portfolio_sector(row.get("sector"))
+        sector_actuals[sector] += float(row.get("allocationPct") or 0.0)
+
+    max_single_name = 25.0 if regime == "Risk-Off" else 30.0 if regime == "Risk-On" else 28.0
+    reduce_actions: List[Dict[str, Any]] = []
+    increase_actions: List[Dict[str, Any]] = []
+
+    rows_sorted = sorted(portfolio, key=lambda item: float(item.get("allocationPct") or 0.0), reverse=True)
+    for row in rows_sorted:
+        current_pct = float(row.get("allocationPct") or 0.0)
+        sector = _normalize_portfolio_sector(row.get("sector"))
+        sector_gap = sector_actuals.get(sector, 0.0) - float(targets.get(sector, 0.0))
+        if current_pct <= max_single_name and sector_gap <= 5.0:
+            continue
+        target_pct = max(
+            min(current_pct, max_single_name),
+            current_pct - max(0.0, min(sector_gap, current_pct * 0.6)),
+        )
+        target_pct = round(min(target_pct, current_pct), 2)
+        if current_pct - target_pct < 2.0:
+            continue
+        reduce_actions.append(
+            {
+                "ticker": row.get("symbol"),
+                "sector": sector,
+                "fromPct": round(current_pct, 2),
+                "toPct": target_pct,
+                "changePct": round(current_pct - target_pct, 2),
+                "reason": f"Reduce concentration risk in {sector.lower()} and align with the current {regime} regime.",
+                "scaling": f"Trim in 2 steps ({round((current_pct - target_pct)/2, 2)}% + {round((current_pct - target_pct)/2, 2)}%) over strength.",
+                "stopLoss": "If the name breaks key support on heavy volume, continue trimming exposure.",
+                "invalidation": "If sector leadership improves and market breadth broadens, pause further reductions.",
+            }
+        )
+
+    for sector, target_pct in targets.items():
+        actual_pct = float(sector_actuals.get(sector, 0.0))
+        gap = round(target_pct - actual_pct, 2)
+        if gap < 4.0:
+            continue
+        existing = next((row for row in rows_sorted if _normalize_portfolio_sector(row.get("sector")) == sector), None)
+        ticker = str(existing.get("symbol")) if existing else PORTFOLIO_ACTION_SYMBOLS.get(sector, "SPY")
+        increase_actions.append(
+            {
+                "ticker": ticker,
+                "sector": sector,
+                "fromPct": round(actual_pct, 2),
+                "targetPct": round(target_pct, 2),
+                "changePct": gap,
+                "reason": f"Underweight versus the {regime} target mix. Increase exposure to strengthen portfolio balance.",
+                "scaling": f"Build in 2 tranches ({round(gap/2, 2)}% + {round(gap/2, 2)}%).",
+                "stopLoss": "Keep the addition small if relative strength fails to improve after entry.",
+                "invalidation": "If market regime shifts away from this sector or volatility expands sharply, delay the add.",
+            }
+        )
+
+    rationale = (
+        "Reduce concentration risk and align holdings with the current regime target allocation."
+        if reduce_actions or increase_actions
+        else "Current portfolio weights are broadly aligned with the regime. Maintain positions and review on regime change."
+    )
+
+    return {
+        "regime": regime,
+        "targetAllocation": [{"sector": sector, "targetPct": round(pct, 2)} for sector, pct in targets.items()],
+        "reduce": reduce_actions[:4],
+        "increase": increase_actions[:4],
+        "rationale": rationale,
+    }
+
+
 def _calculate_portfolio_overview(user_id: int, range_value: str = "1m") -> Dict[str, Any]:
     with SessionLocal() as db:
         positions: List[PortfolioPosition] = (
@@ -3791,7 +4130,13 @@ def _calculate_portfolio_overview(user_id: int, range_value: str = "1m") -> Dict
             },
         }
 
-    rows = []
+    def _parse_position_date(value: Any) -> Optional[date]:
+        try:
+            return datetime.fromisoformat(str(value)).date()
+        except Exception:
+            return None
+
+    aggregated_positions: Dict[str, Dict[str, Any]] = {}
     total_value = 0.0
     total_cost = 0.0
     total_daily_change = 0.0
@@ -3810,13 +4155,48 @@ def _calculate_portfolio_overview(user_id: int, range_value: str = "1m") -> Dict
         if not symbol or shares <= 0:
             continue
 
+        purchase_date = _parse_position_date(p.purchase_date)
+        bucket = aggregated_positions.setdefault(
+            symbol,
+            {
+                "symbol": symbol,
+                "shares": 0.0,
+                "total_cost": 0.0,
+                "lots": [],
+                "position_ids": [],
+                "earliest_purchase_date": None,
+            },
+        )
+        bucket["shares"] += shares
+        bucket["total_cost"] += shares * avg_price
+        bucket["position_ids"].append(p.id)
+        bucket["lots"].append(
+            {
+                "id": p.id,
+                "shares": shares,
+                "average_buy_price": avg_price,
+                "purchase_date": p.purchase_date,
+                "purchase_date_obj": purchase_date,
+            }
+        )
+        if purchase_date and (
+            bucket["earliest_purchase_date"] is None or purchase_date < bucket["earliest_purchase_date"]
+        ):
+            bucket["earliest_purchase_date"] = purchase_date
+
+    rows = []
+    for symbol, bucket in aggregated_positions.items():
+        shares = float(bucket["shares"] or 0.0)
+        if shares <= 0:
+            continue
+        avg_price = (float(bucket["total_cost"] or 0.0) / shares) if shares > 0 else 0.0
         profile = _get_portfolio_profile(symbol)
         quote = _get_portfolio_quote(symbol)
         current_price = safe_float(quote.get("price"))
         previous_close = safe_float(quote.get("previous_close"))
 
         market_value = shares * current_price
-        cost_value = shares * avg_price
+        cost_value = float(bucket["total_cost"] or 0.0)
         gain_loss = market_value - cost_value
         gain_pct = ((current_price - avg_price) / avg_price * 100.0) if avg_price > 0 else 0.0
         daily_change = (current_price - previous_close) * shares if previous_close > 0 else 0.0
@@ -3839,26 +4219,42 @@ def _calculate_portfolio_overview(user_id: int, range_value: str = "1m") -> Dict
             close = safe_float(point.get("close"))
             if not date_key or close <= 0:
                 continue
-            if p.purchase_date:
-                try:
-                    point_date = datetime.fromisoformat(date_key).date()
-                    if point_date < p.purchase_date:
-                        continue
-                except Exception:
-                    pass
-            timeseries_sum[date_key] += close * shares
+            point_date = _parse_position_date(date_key)
+            active_shares = 0.0
+            for lot in bucket["lots"]:
+                lot_purchase_date = lot.get("purchase_date_obj")
+                if point_date and lot_purchase_date and point_date < lot_purchase_date:
+                    continue
+                active_shares += float(lot.get("shares") or 0.0)
+            if active_shares <= 0:
+                continue
+            timeseries_sum[date_key] += close * active_shares
             if prev_close and prev_close > 0:
                 all_returns.append((close - prev_close) / prev_close)
             prev_close = close
 
         rows.append({
-            "id": p.id,
+            "id": bucket["position_ids"][0] if len(bucket["position_ids"]) == 1 else None,
             "symbol": symbol,
             "company": profile.get("company") or symbol,
             "sector": sector_name,
             "shares": round(shares, 4),
             "avgPrice": round(avg_price, 4),
-            "purchaseDate": p.purchase_date,
+            "purchaseDate": bucket["earliest_purchase_date"].isoformat() if bucket["earliest_purchase_date"] else None,
+            "lotCount": len(bucket["lots"]),
+            "positionIds": list(bucket["position_ids"]),
+            "lots": [
+                {
+                    "id": lot["id"],
+                    "shares": round(float(lot.get("shares") or 0.0), 4),
+                    "avgPrice": round(float(lot.get("average_buy_price") or 0.0), 4),
+                    "purchaseDate": lot.get("purchase_date"),
+                }
+                for lot in sorted(
+                    bucket["lots"],
+                    key=lambda item: (str(item.get("purchase_date") or ""), int(item.get("id") or 0)),
+                )
+            ],
             "currentPrice": round(current_price, 4),
             "previousClose": round(previous_close, 4),
             "dailyChange": round(daily_change, 4),
@@ -3901,27 +4297,100 @@ def _calculate_portfolio_overview(user_id: int, range_value: str = "1m") -> Dict
     allocation = []
     for symbol_group in rows:
         pct = (symbol_group["marketValue"] / total_value * 100.0) if total_value > 0 else 0.0
+        symbol_group["allocationPct"] = round(pct, 2)
         allocation.append({
             "name": symbol_group["symbol"],
-            "value": round(pct, 2),
+            "symbol": symbol_group["symbol"],
+            "sector": symbol_group["sector"],
+            "value": round(symbol_group["marketValue"], 2),
+            "allocationPct": round(pct, 2),
+            "marketValue": round(symbol_group["marketValue"], 2),
         })
+    allocation.sort(key=lambda item: item["marketValue"], reverse=True)
 
     sector_exposure = []
     for s_name, s_value in sector_value.items():
         pct = (s_value / total_value * 100.0) if total_value > 0 else 0.0
-        sector_exposure.append({"name": s_name, "value": round(pct, 2)})
+        sector_exposure.append(
+            {
+                "name": s_name,
+                "value": round(pct, 2),
+                "marketValue": round(s_value, 2),
+                "isOverweight": pct >= 35.0,
+            }
+        )
     sector_exposure.sort(key=lambda x: x["value"], reverse=True)
     if sector_exposure:
         dominant_sector = sector_exposure[0]["name"]
 
     performance = [{"label": d, "value": round(v, 2)} for d, v in sorted(timeseries_sum.items(), key=lambda x: x[0])]
+    benchmark_symbol = "SPY"
+    benchmark_history = []
+    try:
+        benchmark_history = get_stock_data(benchmark_symbol, stock_range).get("history", [])
+    except Exception:
+        benchmark_history = []
+    benchmark_by_date: Dict[str, float] = {}
+    for point in benchmark_history:
+        date_key = str(point.get("date", ""))[:10]
+        close = safe_float(point.get("close"))
+        if date_key and close > 0:
+            benchmark_by_date[date_key] = close
+
+    if performance and benchmark_by_date:
+        first_portfolio_value = float(performance[0]["value"] or 0.0)
+        base_benchmark_close = None
+        latest_benchmark_close = None
+        enriched_performance = []
+        for point in performance:
+            label = point["label"]
+            if label in benchmark_by_date:
+                latest_benchmark_close = benchmark_by_date[label]
+            if latest_benchmark_close is None:
+                continue
+            if base_benchmark_close is None:
+                base_benchmark_close = latest_benchmark_close
+            benchmark_value = (
+                first_portfolio_value * (latest_benchmark_close / base_benchmark_close)
+                if first_portfolio_value > 0 and base_benchmark_close > 0
+                else 0.0
+            )
+            portfolio_return_pct = (
+                ((float(point["value"]) / first_portfolio_value) - 1.0) * 100.0
+                if first_portfolio_value > 0
+                else 0.0
+            )
+            benchmark_return_pct = (
+                ((benchmark_value / first_portfolio_value) - 1.0) * 100.0
+                if first_portfolio_value > 0
+                else 0.0
+            )
+            enriched_performance.append(
+                {
+                    **point,
+                    "benchmark": round(benchmark_value, 2),
+                    "portfolioReturnPct": round(portfolio_return_pct, 2),
+                    "benchmarkReturnPct": round(benchmark_return_pct, 2),
+                }
+            )
+        performance = enriched_performance or performance
     if len(performance) > 120:
         step = max(1, len(performance) // 120)
         performance = performance[::step]
 
     unique_sectors = len(sector_exposure)
-    diversification_score = int(max(0, min(100, round((unique_sectors / max(1, min(6, len(rows)))) * 100))))
+    position_weights = [
+        (float(row["marketValue"]) / total_value)
+        for row in rows
+        if total_value > 0 and float(row.get("marketValue") or 0.0) > 0
+    ]
+    effective_positions = (1.0 / sum(weight * weight for weight in position_weights)) if position_weights else 1.0
+    diversification_score = int(max(0, min(100, round((min(effective_positions, 8.0) / 8.0) * 100.0))))
     concentration = sector_exposure[0]["value"] if sector_exposure else 100.0
+    top_holding_pct = max(
+        ((float(row.get("marketValue") or 0.0) / total_value) * 100.0 for row in rows),
+        default=100.0,
+    )
     volatility = 0.0
     if all_returns:
         mean_r = sum(all_returns) / len(all_returns)
@@ -3936,9 +4405,27 @@ def _calculate_portfolio_overview(user_id: int, range_value: str = "1m") -> Dict
     risk_level = "Low" if risk_score < 35 else ("Medium" if risk_score < 70 else "High")
     diversification_label = "High" if diversification_score >= 70 else ("Moderate" if diversification_score >= 40 else "Low")
 
+    concentration_component = int(max(0, min(100, round(100.0 - max(0.0, top_holding_pct - 15.0) * 2.0))))
+    sector_balance_score = int(max(0, min(100, round(100.0 - max(0.0, concentration - 20.0) * 1.6))))
+    portfolio_score = int(round((diversification_score + concentration_component + sector_balance_score) / 3.0))
+
+    concentration_note = (
+        f"Highly concentrated in {dominant_sector}"
+        if concentration >= 50
+        else f"Moderately concentrated in {dominant_sector}"
+        if concentration >= 35
+        else "Reasonably balanced across sectors"
+    )
+
     suggestions = []
     if concentration > 45:
         suggestions.append(f"Reduce {dominant_sector} exposure; current allocation is {concentration:.1f}%.")
+        suggestions.append("Add defensive exposure or broad-market ETFs to lower concentration risk.")
+    if top_holding_pct > 25:
+        largest_row = max(rows, key=lambda item: float(item.get("marketValue") or 0.0))
+        suggestions.append(
+            f"{largest_row['symbol']} is {top_holding_pct:.1f}% of the portfolio. Review single-name risk."
+        )
     if beta_exposure > 1.2:
         suggestions.append("Portfolio beta is above market. Add lower-beta ETFs for stability.")
     if diversification_score < 45:
@@ -3949,6 +4436,17 @@ def _calculate_portfolio_overview(user_id: int, range_value: str = "1m") -> Dict
             "Monitor drawdown and keep a portion in defensive assets.",
         ]
 
+    try:
+        market_snapshot = compute_market_sentiment(force_refresh=False)
+    except Exception:
+        market_snapshot = {
+            "regime": "Neutral",
+            "sentiment_label": "Neutral",
+            "positioning": {"overweight": ["Balanced allocation"], "underweight": [], "neutral": []},
+        }
+
+    action_plan = generate_rebalance_plan(rows, market_snapshot)
+
     return {
         "summary": {
             "totalValue": round(total_value, 2),
@@ -3958,22 +4456,58 @@ def _calculate_portfolio_overview(user_id: int, range_value: str = "1m") -> Dict
             "totalGainPct": round(total_gain_pct, 2),
             "holdingsCount": len(rows),
             "diversificationScore": diversification_score,
+            "portfolioScore": portfolio_score,
+            "scoreBreakdown": {
+                "diversification": diversification_score,
+                "riskConcentration": concentration_component,
+                "sectorBalance": sector_balance_score,
+                "explanation": f"{portfolio_score}/100 \u2192 {concentration_note.lower()}",
+            },
+            "benchmark": benchmark_symbol,
+            "benchmarkReturnPct": round(
+                safe_float(performance[-1].get("benchmarkReturnPct")) if performance and isinstance(performance[-1], dict) else 0.0,
+                2,
+            ),
         },
         "rows": rows,
         "allocation": allocation,
         "sectorExposure": sector_exposure,
         "performance": performance,
-        "risk": {"score": risk_score, "level": risk_level, "betaExposure": round(beta_exposure, 2), "volatility": round(volatility, 2)},
+        "risk": {
+            "score": risk_score,
+            "level": risk_level,
+            "betaExposure": round(beta_exposure, 2),
+            "volatility": round(volatility, 2),
+            "topHoldingPct": round(top_holding_pct, 2),
+            "dominantSectorPct": round(concentration, 2),
+        },
         "insight": {
             "summary": (
-                f"Portfolio diversification: {diversification_label}. "
-                f"Dominant sector: {dominant_sector}. "
-                f"Current risk level: {risk_level}."
+                f"Your portfolio is {concentration_note.lower()} ({concentration:.1f}% in {dominant_sector}). "
+                f"Diversification is {diversification_label.lower()} and current risk is {risk_level.lower()}."
             ),
             "dominant_sector": dominant_sector,
             "diversification": diversification_label,
+            "dominantSectorPct": round(concentration, 2),
+            "topHoldingPct": round(top_holding_pct, 2),
+            "marketRegime": str(market_snapshot.get("regime") or "Neutral"),
+            "marketSentiment": str(market_snapshot.get("sentiment_label") or market_snapshot.get("sentiment") or "Neutral"),
+            "scoreBreakdown": {
+                "diversification": diversification_score,
+                "riskConcentration": concentration_component,
+                "sectorBalance": sector_balance_score,
+                "overall": portfolio_score,
+                "explanation": f"{portfolio_score}/100 \u2192 {concentration_note.lower()}",
+            },
             "suggestions": suggestions,
         },
+        "benchmark": {"symbol": benchmark_symbol, "label": benchmark_symbol},
+        "marketContext": {
+            "regime": str(market_snapshot.get("regime") or "Neutral"),
+            "sentiment": str(market_snapshot.get("sentiment_label") or market_snapshot.get("sentiment") or "Neutral"),
+            "positioning": market_snapshot.get("positioning") or {},
+        },
+        "actionPlan": action_plan,
     }
 
 
@@ -8289,13 +8823,9 @@ def create_portfolio_position(
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol is required")
 
-    try:
-        # Validate symbol quickly with provider quote.
-        q = _get_portfolio_quote(symbol)
-        if safe_float(q.get("price")) <= 0:
-            raise ValueError("invalid price")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid symbol or quote unavailable: {e}")
+    validation = _validate_portfolio_symbol(symbol)
+    if not validation.get("ok"):
+        raise HTTPException(status_code=400, detail=str(validation.get("message") or "Ticker not found"))
 
     with SessionLocal() as db:
         row = PortfolioPosition(
@@ -8317,6 +8847,7 @@ def create_portfolio_position(
             "average_buy_price": float(row.average_buy_price),
             "purchase_date": row.purchase_date,
         },
+        "validation": validation,
     }
 
 
@@ -8328,6 +8859,7 @@ def update_portfolio_position(
     authorization: Optional[str] = Header(default=None),
 ):
     user_id = _extract_user_id_from_authorization(authorization)
+    validation = {"ok": True, "mode": "unchanged", "warning": None}
     with SessionLocal() as db:
         row: Optional[PortfolioPosition] = (
             db.query(PortfolioPosition)
@@ -8341,6 +8873,9 @@ def update_portfolio_position(
             next_symbol = str(payload.symbol).upper().strip()
             if not next_symbol:
                 raise HTTPException(status_code=400, detail="symbol cannot be empty")
+            validation = _validate_portfolio_symbol(next_symbol)
+            if not validation.get("ok"):
+                raise HTTPException(status_code=400, detail=str(validation.get("message") or "Ticker not found"))
             row.symbol = next_symbol
         if payload.shares is not None:
             row.shares = float(payload.shares)
@@ -8363,6 +8898,7 @@ def update_portfolio_position(
             "average_buy_price": float(row.average_buy_price),
             "purchase_date": row.purchase_date,
         },
+        "validation": validation if payload.symbol is not None else {"ok": True, "mode": "unchanged", "warning": None},
     }
 
 
@@ -8636,6 +9172,13 @@ def portfolio_overview(
     payload["updated_at"] = datetime.utcnow().isoformat()
     payload["sources"] = ["Finnhub", "FMP", "Internal Portfolio Model"]
     return payload
+
+
+@app.get("/stocks/search")
+@app.get("/api/stocks/search")
+def stocks_search(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1, le=12)):
+    items = _search_stock_suggestions(q, limit=limit)
+    return items
 
 @app.get("/stock/{symbol}")
 def stock_endpoint(
