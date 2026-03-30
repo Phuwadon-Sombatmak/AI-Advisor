@@ -394,6 +394,7 @@ function StructuredAnswer({ schema, summary, intent, dark }) {
 
 export default function ChatMessage({ message, dark = false }) {
   const isUser = message.role === "user";
+  const shouldShowConfidenceFooter = !isUser && !message?.isGreeting;
   const structuredLead = !isUser ? getStructuredLead(message.schema, message.intent) : null;
   const shouldHideFullParagraph = Boolean(structuredLead);
   const sourceTags = Array.isArray(message?.schema?.source_tags) ? message.schema.source_tags : [];
@@ -425,7 +426,7 @@ export default function ChatMessage({ message, dark = false }) {
         {!isUser ? <SourceTags tags={sourceTags} dark={dark} /> : null}
         {!isUser ? <ChartBlock charts={message.charts} dark={dark} /> : null}
 
-        {!isUser ? (
+        {shouldShowConfidenceFooter ? (
           <ConfidenceFooter
             confidence={message.confidence}
             confidenceSplit={message.confidenceSplit}

@@ -36,6 +36,7 @@ function buildGreetingMessage(greetingText) {
     role: "assistant",
     text: greetingText,
     time: now(),
+    isGreeting: true,
     confidence: null,
     sources: [],
     followups: BASE_PROMPTS.slice(0, 3),
