@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
-import { Routes, Route, Navigate, Outlet, useNavigate, useParams, useLocation } from "react-router-dom";
+import { Routes, Route, Navigate, Outlet, useNavigate, useParams, useLocation, Link } from "react-router-dom";
 import { ArrowLeft, Loader2, ShieldAlert, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -3470,6 +3470,14 @@ const AIInsightsPage = ({ watchlist = [], recentSearches = [] }) => {
       <div>
         <h1 className={`${dark ? "text-slate-100" : "text-slate-900"} text-3xl font-bold`}>{t("aiInsightsHub")}</h1>
         <p className="text-slate-500">{t("aiInsightsSubtitle")}</p>
+        <div className="mt-3">
+          <Link
+            to="/ai-backtest"
+            className="inline-flex items-center rounded-xl border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-100"
+          >
+            {t("openBacktestReport")}
+          </Link>
+        </div>
       </div>
 
       {error ? (
@@ -3500,6 +3508,199 @@ const AIInsightsPage = ({ watchlist = [], recentSearches = [] }) => {
           />
         </div>
       </div>
+    </div>
+  );
+};
+
+const AITestingReportPage = () => {
+  const { t } = useTranslation();
+  const { theme } = useContext(ThemeContext);
+  const dark = theme === "dark";
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [report, setReport] = useState(null);
+  const [historical7, setHistorical7] = useState(null);
+  const [historical14, setHistorical14] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [reportPayload, historical7Payload, historical14Payload] = await Promise.all([
+        fetchJsonWithRetry(
+          [apiUrl("/api/ai-backtest/report"), localFastapiUrl("/api/ai-backtest/report")],
+          1,
+          10000
+        ),
+        fetchJsonWithRetry(
+          [apiUrl("/api/ai-backtest/historical?horizon=7"), localFastapiUrl("/api/ai-backtest/historical?horizon=7")],
+          1,
+          10000
+        ),
+        fetchJsonWithRetry(
+          [apiUrl("/api/ai-backtest/historical?horizon=14"), localFastapiUrl("/api/ai-backtest/historical?horizon=14")],
+          1,
+          10000
+        ),
+      ]);
+      setReport(reportPayload || null);
+      setHistorical7(historical7Payload || null);
+      setHistorical14(historical14Payload || null);
+    } catch (e) {
+      setError(e?.message || "Unable to load AI backtest report");
+      setReport(null);
+      setHistorical7(null);
+      setHistorical14(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const report7 = report?.breakdown?.["7d"] || {};
+  const report14 = report?.breakdown?.["14d"] || {};
+  const sampleRows = ((report7.items || []).slice(0, 3)).concat((report14.items || []).slice(0, 3));
+
+  const SummaryCard = ({ title, value, hint }) => (
+    <div className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-200"} rounded-2xl border p-5 shadow-md`}>
+      <p className="text-sm text-slate-500 font-medium">{title}</p>
+      <p className={`${dark ? "text-slate-100" : "text-slate-900"} mt-2 text-2xl font-bold`}>{value}</p>
+      {hint ? <p className="mt-2 text-xs text-slate-500">{hint}</p> : null}
+    </div>
+  );
+
+  const HorizonTable = ({ title, payload }) => {
+    const items = payload?.items || [];
+    return (
+      <section className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-200"} rounded-2xl border p-5 shadow-md space-y-4`}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className={`${dark ? "text-slate-100" : "text-slate-900"} text-xl font-bold`}>{title}</h3>
+            <p className="text-sm text-slate-500">
+              {t("openSnapshots")}: {payload?.open_snapshots || 0} · {t("evaluatedTrades")}: {payload?.trades || 0}
+            </p>
+          </div>
+          <span className={`rounded-full px-3 py-1 text-xs font-bold ${payload?.low_confidence ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
+            {payload?.confidence || t("dataUnavailable")}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <SummaryCard title={t("winRate")} value={`${Number(payload?.win_rate || 0).toFixed(2)}%`} />
+          <SummaryCard title={t("avgReturn")} value={`${Number(payload?.avg_return || 0).toFixed(2)}%`} />
+          <SummaryCard title={t("maxDrawdown")} value={`${Number(payload?.max_drawdown || 0).toFixed(2)}%`} />
+          <SummaryCard title={t("sharpeRatio")} value={payload?.sharpe == null ? "-" : Number(payload.sharpe).toFixed(3)} />
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="text-left text-slate-500">
+              <tr>
+                <th className="py-2 pr-4">{t("ticker")}</th>
+                <th className="py-2 pr-4">{t("recommendationLabel")}</th>
+                <th className="py-2 pr-4">{t("entryPrice")}</th>
+                <th className="py-2 pr-4">{t("forecast30d")}</th>
+                <th className="py-2 pr-4">{t("evaluationDueDate")}</th>
+                <th className="py-2 pr-4">{t("statusLabel")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.length ? items.slice(0, 10).map((item) => (
+                <tr key={`${title}-${item.id}`} className="border-t border-slate-200/60">
+                  <td className="py-2 pr-4 font-semibold text-sky-600">{item.symbol}</td>
+                  <td className="py-2 pr-4">{item.recommendation}</td>
+                  <td className="py-2 pr-4">{item.current_price ?? "-"}</td>
+                  <td className="py-2 pr-4">{item.forecast_30d_pct == null ? "-" : `${Number(item.forecast_30d_pct).toFixed(2)}%`}</td>
+                  <td className="py-2 pr-4">{item.evaluation_due_at ? new Date(item.evaluation_due_at).toLocaleDateString() : "-"}</td>
+                  <td className="py-2 pr-4">{item.status}</td>
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan="6" className="py-6 text-slate-500">{t("noBacktestData")}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    );
+  };
+
+  const HistoricalCard = ({ title, payload }) => (
+    <section className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-200"} rounded-2xl border p-5 shadow-md`}>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h3 className={`${dark ? "text-slate-100" : "text-slate-900"} text-xl font-bold`}>{title}</h3>
+          <p className="text-sm text-slate-500">{payload?.message || t("dataUnavailable")}</p>
+        </div>
+        <span className={`rounded-full px-3 py-1 text-xs font-bold ${payload?.status === "ready" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+          {payload?.status || t("dataUnavailable")}
+        </span>
+      </div>
+      <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+        <SummaryCard title={t("signalsTracked")} value={payload?.signals ?? 0} />
+        <SummaryCard title={t("historicalReturn")} value={payload?.result ? `${Number(payload.result.total_return || 0).toFixed(2)}%` : "-"} />
+        <SummaryCard title={t("historicalVsSpy")} value={payload?.result ? `${Number(payload.result.vs_spy || 0).toFixed(2)}%` : "-"} />
+        <SummaryCard title={t("historicalWinRate")} value={payload?.result ? `${Number(payload.result.win_rate || 0).toFixed(2)}%` : "-"} />
+      </div>
+    </section>
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className={`${dark ? "text-slate-100" : "text-slate-900"} text-3xl font-bold`}>{t("aiBacktestTitle")}</h1>
+          <p className="text-slate-500">{t("aiBacktestSubtitle")}</p>
+        </div>
+        <button
+          onClick={load}
+          className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          {loading ? t("refreshing") : t("refresh")}
+        </button>
+      </div>
+
+      {error ? (
+        <div className={`${dark ? "bg-rose-950/30 border-rose-900/50 text-rose-300" : "bg-rose-50 border-rose-200 text-rose-700"} rounded-2xl border p-4 text-sm font-medium`}>
+          {error}
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <SummaryCard title={t("snapshotsTracked")} value={report?.summary?.items?.length || 0} hint={t("backtestTrackedHint")} />
+        <SummaryCard title={t("openSnapshots")} value={report?.summary?.open_snapshots || 0} hint={t("backtestOpenHint")} />
+        <SummaryCard title={t("evaluatedTrades")} value={report?.summary?.trades || 0} hint={t("backtestEvaluatedHint")} />
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+        <HorizonTable title={t("report7d")} payload={report7} />
+        <HorizonTable title={t("report14d")} payload={report14} />
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+        <HistoricalCard title={t("historicalBacktest7d")} payload={historical7} />
+        <HistoricalCard title={t("historicalBacktest14d")} payload={historical14} />
+      </div>
+
+      <section className={`${dark ? "bg-[#0F172A] border-slate-700" : "bg-white border-slate-200"} rounded-2xl border p-5 shadow-md`}>
+        <h3 className={`${dark ? "text-slate-100" : "text-slate-900"} text-xl font-bold mb-2`}>{t("presentationNoteTitle")}</h3>
+        <p className="text-slate-600 leading-relaxed">
+          {t("presentationNoteBody")}
+        </p>
+        {sampleRows.length ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {sampleRows.slice(0, 6).map((item) => (
+              <span key={`sample-${item.id}`} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                {item.symbol} · {item.recommendation} · {item.evaluation_horizon_days}D
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </section>
     </div>
   );
 };
@@ -3593,6 +3794,7 @@ export default function App() {
             <Route path="/risk" element={<RiskPage />} />
             <Route path="/ai-picker" element={<AIPickerPage />} />
             <Route path="/ai-insights" element={<AIInsightsPage watchlist={watchlist} recentSearches={recentSearches} />} />
+            <Route path="/ai-backtest" element={<AITestingReportPage />} />
             <Route path="/portfolio" element={<PortfolioPage watchlist={watchlist} onAddWatchSymbol={addWatchSymbol} />} />
             <Route path="/news" element={<NewsPage bookmarkedNews={bookmarkedNews} onToggleNewsBookmark={toggleNewsBookmark} />} />
           </Route>

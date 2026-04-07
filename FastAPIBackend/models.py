@@ -78,6 +78,7 @@ class AIRecommendationTrade(Base):
     recommendation = Column(String(32), nullable=False)
     position = Column(String(8), nullable=False)  # long / short
     size = Column(Float, nullable=False, default=1.0)
+    holding_period_days = Column(Integer, nullable=False, default=30)
     entry_price = Column(Float, nullable=False)
     entry_time = Column(DateTime, default=utcnow, nullable=False, index=True)
     status = Column(String(16), nullable=False, default="open", index=True)
@@ -87,3 +88,24 @@ class AIRecommendationTrade(Base):
     realized_pnl = Column(Float, nullable=False, default=0.0)
     created_at = Column(DateTime, default=utcnow, nullable=False)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class AIRecommendationSnapshot(Base):
+    __tablename__ = "ai_recommendation_snapshots"
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(16), nullable=False, index=True)
+    recommendation = Column(String(32), nullable=False)
+    ai_score = Column(Float, nullable=True)
+    confidence = Column(Float, nullable=True)
+    current_price = Column(Float, nullable=True)
+    target_price = Column(Float, nullable=True)
+    upside_pct = Column(Float, nullable=True)
+    sentiment_avg = Column(Float, nullable=True)
+    forecast_30d_pct = Column(Float, nullable=True)
+    evaluation_horizon_days = Column(Integer, nullable=False, index=True, default=14)
+    created_at = Column(DateTime, default=utcnow, nullable=False, index=True)
+    evaluation_due_at = Column(DateTime, nullable=False, index=True)
+    status = Column(String(16), nullable=False, default="open", index=True)
+    exit_price = Column(Float, nullable=True)
+    realized_return_pct = Column(Float, nullable=True)
+    notes = Column(Text, nullable=True)

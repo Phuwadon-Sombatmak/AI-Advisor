@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 from sqlalchemy import text
 
 from init_db import SessionLocal, engine, Base
-from models import PortfolioPosition, AIRecommendationTrade
+from models import PortfolioPosition, AIRecommendationTrade, AIRecommendationSnapshot
 
 # ==========================================
 # 1. ประกาศ Logger ไว้เป็นอันดับแรกสุด เพื่อให้ทุกส่วนพร้อมใช้งาน
@@ -109,6 +109,13 @@ try:
 except Exception as e:
     logger.error(f"❌ Failed to load modular advisor architecture: {e}")
     HAS_MODULAR_ADVISOR = False
+
+try:
+    from analysis.backtesting import run_backtest
+    HAS_BACKTEST_ENGINE = True
+except Exception as e:
+    logger.error(f"❌ Failed to load backtesting engine: {e}")
+    HAS_BACKTEST_ENGINE = False
 
 # ==========================================
 # 5. เริ่มต้นแอป FastAPI
@@ -3201,6 +3208,7 @@ class AITradeSignalRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=16)
     recommendation: str = Field(..., min_length=3, max_length=32)
     size: float = Field(default=1.0, gt=0, le=1.0)
+    holding_period_days: int = Field(default=14, ge=7, le=30)
 
 
 class AITradeExitRequest(BaseModel):
@@ -3209,6 +3217,12 @@ class AITradeExitRequest(BaseModel):
 
 class AIAutoTuneRequest(BaseModel):
     operator: Optional[str] = Field(default="system", min_length=2, max_length=64)
+
+
+class AIBacktestCollectRequest(BaseModel):
+    symbols: List[str] = Field(default_factory=list)
+    horizons: List[int] = Field(default_factory=lambda: [7, 14])
+    window_days: int = Field(default=14, ge=7, le=30)
 
 
 def _extract_user_id_from_authorization(auth_header: Optional[str]) -> int:
@@ -3414,6 +3428,31 @@ def _signal_trade_profile(label: Any) -> Dict[str, Any]:
     }
 
 
+def _normalize_holding_period_days(value: Any) -> int:
+    try:
+        days = int(value)
+    except Exception:
+        return 14
+    if days <= 7:
+        return 7
+    if days <= 14:
+        return 14
+    return 30
+
+
+def _coerce_int_query_value(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        pass
+
+    query_default = getattr(value, "default", None)
+    try:
+        return int(query_default)
+    except Exception:
+        return int(default)
+
+
 def _trade_direction_multiplier(position: Any) -> float:
     return 1.0 if str(position or "").lower() == "long" else -1.0
 
@@ -3448,18 +3487,21 @@ def _close_trade(row: AIRecommendationTrade, exit_price: float, reason: str) -> 
 
 
 def _close_expired_ai_trades(db, user_id: int) -> int:
-    expiry_cutoff = datetime.utcnow() - timedelta(days=30)
     rows: List[AIRecommendationTrade] = (
         db.query(AIRecommendationTrade)
         .filter(
             AIRecommendationTrade.user_id == user_id,
             AIRecommendationTrade.status == "open",
-            AIRecommendationTrade.entry_time <= expiry_cutoff,
         )
         .all()
     )
     closed = 0
+    now_dt = datetime.utcnow()
     for row in rows:
+        holding_period_days = _normalize_holding_period_days(getattr(row, "holding_period_days", 30))
+        expiry_cutoff = now_dt - timedelta(days=holding_period_days)
+        if not row.entry_time or row.entry_time > expiry_cutoff:
+            continue
         quote = _get_portfolio_quote(row.symbol)
         current_price = safe_float(quote.get("price"))
         if current_price <= 0:
@@ -3498,6 +3540,7 @@ def _serialize_ai_trade(row: AIRecommendationTrade) -> Dict[str, Any]:
         "recommendation": row.recommendation,
         "position": row.position,
         "size": round(safe_float(row.size), 4),
+        "holding_period_days": _normalize_holding_period_days(getattr(row, "holding_period_days", 30)),
         "entry_price": round(safe_float(row.entry_price), 4),
         "entry_time": row.entry_time.isoformat() if row.entry_time else None,
         "status": row.status,
@@ -3549,6 +3592,211 @@ def _summarize_ai_trades(rows: List[AIRecommendationTrade]) -> Dict[str, Any]:
         "win_rate": round(win_rate, 2),
         "average_trade_return": round(average_trade_return, 4),
         "trades": serialized,
+    }
+
+
+def _serialize_ai_snapshot(row: AIRecommendationSnapshot) -> Dict[str, Any]:
+    ai_score = row.ai_score if row.ai_score is not None else None
+    confidence = row.confidence if row.confidence is not None else None
+    current_price = row.current_price if row.current_price is not None else None
+    target_price = row.target_price if row.target_price is not None else None
+    upside_pct = row.upside_pct if row.upside_pct is not None else None
+    sentiment_avg = row.sentiment_avg if row.sentiment_avg is not None else None
+    forecast_30d_pct = row.forecast_30d_pct if row.forecast_30d_pct is not None else None
+    exit_price = row.exit_price if row.exit_price is not None else None
+    realized_return_pct = row.realized_return_pct if row.realized_return_pct is not None else None
+    return {
+        "id": row.id,
+        "symbol": row.symbol,
+        "recommendation": row.recommendation,
+        "ai_score": round(float(ai_score), 2) if ai_score is not None else None,
+        "confidence": round(float(confidence), 4) if confidence is not None else None,
+        "current_price": round(float(current_price), 4) if current_price is not None else None,
+        "target_price": round(float(target_price), 4) if target_price is not None else None,
+        "upside_pct": round(float(upside_pct), 4) if upside_pct is not None else None,
+        "sentiment_avg": round(float(sentiment_avg), 4) if sentiment_avg is not None else None,
+        "forecast_30d_pct": round(float(forecast_30d_pct), 4) if forecast_30d_pct is not None else None,
+        "evaluation_horizon_days": int(row.evaluation_horizon_days or 14),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "evaluation_due_at": row.evaluation_due_at.isoformat() if row.evaluation_due_at else None,
+        "status": row.status,
+        "exit_price": round(float(exit_price), 4) if exit_price is not None else None,
+        "realized_return_pct": round(float(realized_return_pct), 4) if realized_return_pct is not None else None,
+        "notes": row.notes,
+    }
+
+
+def _filter_history_from_signal_date(history_rows: List[Dict[str, Any]], signal_start: Any) -> List[Dict[str, Any]]:
+    if not history_rows:
+        return []
+    try:
+        start_ts = pd.to_datetime(signal_start).normalize()
+    except Exception:
+        return list(history_rows)
+
+    filtered: List[Dict[str, Any]] = []
+    for row in history_rows:
+        try:
+            row_ts = pd.to_datetime(row.get("date")).normalize()
+        except Exception:
+            continue
+        if row_ts >= start_ts:
+            filtered.append(row)
+    return filtered
+
+
+def _close_due_ai_snapshots(db) -> int:
+    now_dt = datetime.utcnow()
+    rows: List[AIRecommendationSnapshot] = (
+        db.query(AIRecommendationSnapshot)
+        .filter(
+            AIRecommendationSnapshot.status == "open",
+            AIRecommendationSnapshot.evaluation_due_at <= now_dt,
+        )
+        .all()
+    )
+    closed = 0
+    for row in rows:
+        quote = _get_portfolio_quote(row.symbol)
+        exit_price = safe_float(quote.get("price"))
+        entry_price = safe_float(row.current_price)
+        if exit_price <= 0 or entry_price <= 0:
+            continue
+        row.exit_price = float(exit_price)
+        row.realized_return_pct = round(((exit_price - entry_price) / entry_price) * 100.0, 4)
+        row.status = "closed"
+        db.add(row)
+        closed += 1
+    if closed:
+        db.commit()
+    return closed
+
+
+def _snapshot_return_metrics(rows: List[AIRecommendationSnapshot]) -> Dict[str, Any]:
+    serialized = [_serialize_ai_snapshot(row) for row in rows]
+    closed_rows = [row for row in serialized if row.get("status") == "closed" and row.get("realized_return_pct") is not None]
+    returns = [float(row.get("realized_return_pct") or 0.0) for row in closed_rows]
+    metrics = _compute_return_risk_metrics(returns)
+    open_count = sum(1 for row in serialized if row.get("status") == "open")
+    due_count = sum(
+        1 for row in serialized
+        if row.get("status") == "open" and _parse_iso_datetime(row.get("evaluation_due_at")) and _parse_iso_datetime(row.get("evaluation_due_at")) <= datetime.utcnow()
+    )
+    return {
+        "trades": metrics["trades"],
+        "open_snapshots": open_count,
+        "due_for_evaluation": due_count,
+        "confidence": metrics["confidence"],
+        "low_confidence": metrics["low_confidence"],
+        "avg_return": metrics["avg_return"],
+        "win_rate": metrics["win_rate"],
+        "std_return": metrics["std_return"],
+        "sharpe": metrics["sharpe"],
+        "sortino": metrics["sortino"],
+        "max_drawdown": metrics["max_drawdown"],
+        "calmar": metrics["calmar"],
+        "profit_factor": metrics["profit_factor"],
+        "profit_factor_status": metrics["profit_factor_status"],
+        "best_trade": metrics["best_trade"],
+        "worst_trade": metrics["worst_trade"],
+        "items": serialized,
+    }
+
+
+def _collect_ai_recommendation_snapshots(symbols: List[str], horizons: List[int], window_days: int = 14) -> Dict[str, Any]:
+    requested_symbols = [normalize_symbol(symbol) for symbol in (symbols or []) if str(symbol or "").strip()]
+    universe = requested_symbols or list(TICKERS)
+    normalized_horizons = sorted({int(_normalize_holding_period_days(value)) for value in (horizons or [7, 14])})
+    created: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+
+    with SessionLocal() as db:
+        _close_due_ai_snapshots(db)
+        now_dt = datetime.utcnow()
+        today_floor = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        for symbol in universe:
+            try:
+                payload = recommend_endpoint(symbol=symbol, window_days=window_days)
+                if not isinstance(payload, dict) or not payload.get("available"):
+                    errors.append({
+                        "symbol": symbol,
+                        "reason": str((payload or {}).get("error") or "recommendation_unavailable"),
+                    })
+                    continue
+
+                for horizon in normalized_horizons:
+                    existing = (
+                        db.query(AIRecommendationSnapshot)
+                        .filter(
+                            AIRecommendationSnapshot.symbol == symbol,
+                            AIRecommendationSnapshot.evaluation_horizon_days == horizon,
+                            AIRecommendationSnapshot.created_at >= today_floor,
+                        )
+                        .order_by(AIRecommendationSnapshot.created_at.desc())
+                        .first()
+                    )
+                    if existing:
+                        skipped.append({
+                            "symbol": symbol,
+                            "horizon": horizon,
+                            "snapshot_id": existing.id,
+                            "reason": "already_collected_today",
+                        })
+                        continue
+
+                    forecast = (payload.get("forecast") or {}).get("predicted_return_pct")
+                    current_price = payload.get("current_price")
+                    target_price = payload.get("target_price")
+                    upside_pct = payload.get("upside_pct")
+                    sentiment_avg = payload.get("sentiment_avg")
+                    ai_score = payload.get("ai_score")
+                    confidence = payload.get("confidence")
+                    row = AIRecommendationSnapshot(
+                        symbol=symbol,
+                        recommendation=str(payload.get("recommendation") or "N/A"),
+                        ai_score=float(ai_score) if ai_score is not None else None,
+                        confidence=float(confidence) if confidence is not None else None,
+                        current_price=float(current_price) if current_price is not None else None,
+                        target_price=float(target_price) if target_price is not None else None,
+                        upside_pct=float(upside_pct) if upside_pct is not None else None,
+                        sentiment_avg=float(sentiment_avg) if sentiment_avg is not None else None,
+                        forecast_30d_pct=float(forecast) if forecast is not None else None,
+                        evaluation_horizon_days=horizon,
+                        created_at=now_dt,
+                        evaluation_due_at=now_dt + timedelta(days=horizon),
+                        status="open",
+                        notes=f"window_days={window_days}",
+                    )
+                    db.add(row)
+                    db.flush()
+                    created.append({
+                        "snapshot_id": row.id,
+                        "symbol": symbol,
+                        "horizon": horizon,
+                        "recommendation": row.recommendation,
+                        "current_price": row.current_price,
+                        "target_price": row.target_price,
+                        "ai_score": row.ai_score,
+                    })
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                errors.append({
+                    "symbol": symbol,
+                    "reason": str(exc),
+                })
+
+    return {
+        "symbols_requested": universe,
+        "horizons": normalized_horizons,
+        "window_days": window_days,
+        "created": created,
+        "skipped": skipped,
+        "errors": errors,
+        "created_count": len(created),
+        "skipped_count": len(skipped),
+        "error_count": len(errors),
     }
 
 
@@ -3697,6 +3945,43 @@ def _aggregate_trade_groups(rows: List[Dict[str, Any]], key_name: str) -> List[D
         })
     summary.sort(key=lambda item: (item["average_return"], item["win_rate"]), reverse=True)
     return summary
+
+
+def _ensure_ai_trade_schema() -> bool:
+    if not DB_TABLES_READY:
+        return False
+    try:
+        dialect = engine.dialect.name
+        with engine.begin() as conn:
+            if dialect == "sqlite":
+                columns = [row[1] for row in conn.execute(text("PRAGMA table_info(ai_recommendation_trades)")).fetchall()]
+                if "holding_period_days" not in columns:
+                    conn.execute(text("ALTER TABLE ai_recommendation_trades ADD COLUMN holding_period_days INTEGER NOT NULL DEFAULT 30"))
+            else:
+                conn.execute(text("ALTER TABLE ai_recommendation_trades ADD COLUMN IF NOT EXISTS holding_period_days INTEGER NOT NULL DEFAULT 30"))
+        logger.info("AI trade schema verified")
+        return True
+    except Exception as exc:
+        logger.warning(f"AI trade schema verification skipped: {exc}")
+        return False
+
+
+AI_TRADE_SCHEMA_READY = _ensure_ai_trade_schema()
+
+
+def _ensure_ai_snapshot_schema() -> bool:
+    if not DB_TABLES_READY:
+        return False
+    try:
+        Base.metadata.create_all(bind=engine, tables=[AIRecommendationSnapshot.__table__])
+        logger.info("AI snapshot schema verified")
+        return True
+    except Exception as exc:
+        logger.warning(f"AI snapshot schema verification skipped: {exc}")
+        return False
+
+
+AI_SNAPSHOT_SCHEMA_READY = _ensure_ai_snapshot_schema()
 
 
 def _load_regime_history(limit: int = 5000) -> List[Dict[str, Any]]:
@@ -9189,6 +9474,7 @@ def create_ai_trade_signal(
     recommendation = signal_profile["recommendation"]
     position = signal_profile["position"]
     size = min(float(payload.size or signal_profile["default_size"] or 0.0), 1.0)
+    holding_period_days = _normalize_holding_period_days(payload.holding_period_days)
 
     with SessionLocal() as db:
         _close_expired_ai_trades(db, user_id)
@@ -9245,6 +9531,7 @@ def create_ai_trade_signal(
             recommendation=recommendation,
             position=position,
             size=size if size > 0 else float(signal_profile["default_size"] or 1.0),
+            holding_period_days=holding_period_days,
             entry_price=float(current_price),
             entry_time=datetime.utcnow(),
             status="open",
@@ -9258,6 +9545,7 @@ def create_ai_trade_signal(
             "action": "opened",
             "symbol": symbol,
             "recommendation": recommendation,
+            "holding_period_days": holding_period_days,
             "trade": _serialize_ai_trade(trade),
             "closed_trade_ids": closed_trade_ids,
         }
@@ -9334,6 +9622,12 @@ def ai_trade_summary(authorization: Optional[str] = Header(default=None)):
             .all()
         )
     summary = _summarize_ai_trades(rows)
+    serialized_rows = summary.get("trades") or []
+    summary["horizon_breakdown"] = {
+        "7d": _compute_trade_window_metrics([row for row in serialized_rows if _normalize_holding_period_days(row.get("holding_period_days")) == 7]),
+        "14d": _compute_trade_window_metrics([row for row in serialized_rows if _normalize_holding_period_days(row.get("holding_period_days")) == 14]),
+        "30d": _compute_trade_window_metrics([row for row in serialized_rows if _normalize_holding_period_days(row.get("holding_period_days")) == 30]),
+    }
     summary["ok"] = True
     return summary
 
@@ -9342,6 +9636,7 @@ def ai_trade_summary(authorization: Optional[str] = Header(default=None)):
 @app.get("/api/ai-trades/evaluation")
 def ai_trade_evaluation(
     window: str = Query("all", description="30 | 90 | all"),
+    horizon: str = Query("all", description="7 | 14 | 30 | all"),
     authorization: Optional[str] = Header(default=None),
 ):
     user_id = _extract_user_id_from_authorization(authorization)
@@ -9356,10 +9651,15 @@ def ai_trade_evaluation(
         if normalized_window in {"30", "90"}:
             query = query.limit(int(normalized_window))
         rows: List[AIRecommendationTrade] = query.all()
+    normalized_horizon = str(horizon or "all").lower()
+    if normalized_horizon in {"7", "14", "30"}:
+        target_horizon = int(normalized_horizon)
+        rows = [row for row in rows if _normalize_holding_period_days(getattr(row, "holding_period_days", 30)) == target_horizon]
     payload = _build_ai_trade_evaluation(rows)
     payload["ok"] = True
     payload["evaluated_trades"] = len(rows)
     payload["window"] = normalized_window
+    payload["horizon"] = normalized_horizon
     return payload
 
 
@@ -9413,6 +9713,167 @@ def ai_trade_autotune_apply(
         "adjustments": list(preview.get("adjustments") or []),
         "config": saved,
     }
+
+
+@app.post("/api/ai-backtest/collect")
+@app.post("/ai-backtest/collect")
+def collect_ai_backtest_snapshots(payload: AIBacktestCollectRequest = Body(default=AIBacktestCollectRequest())):
+    result = _collect_ai_recommendation_snapshots(
+        symbols=payload.symbols,
+        horizons=payload.horizons,
+        window_days=payload.window_days,
+    )
+    return {
+        "ok": True,
+        **result,
+    }
+
+
+@app.get("/api/ai-backtest/report")
+@app.get("/ai-backtest/report")
+def ai_backtest_report(
+    horizon: str = Query("all", description="7 | 14 | 30 | all"),
+    limit: int = Query(200, ge=10, le=2000),
+):
+    normalized_limit = _coerce_int_query_value(limit, 200)
+    normalized_horizon = str(horizon or "all").lower()
+    with SessionLocal() as db:
+        _close_due_ai_snapshots(db)
+        query = (
+            db.query(AIRecommendationSnapshot)
+            .order_by(AIRecommendationSnapshot.created_at.desc())
+            .limit(normalized_limit)
+        )
+        rows: List[AIRecommendationSnapshot] = query.all()
+
+    if normalized_horizon in {"7", "14", "30"}:
+        target_horizon = int(normalized_horizon)
+        rows = [row for row in rows if int(row.evaluation_horizon_days or 14) == target_horizon]
+
+    horizon_groups = {
+        "7d": [row for row in rows if int(row.evaluation_horizon_days or 14) == 7],
+        "14d": [row for row in rows if int(row.evaluation_horizon_days or 14) == 14],
+        "30d": [row for row in rows if int(row.evaluation_horizon_days or 14) == 30],
+    }
+
+    return {
+        "ok": True,
+        "horizon": normalized_horizon,
+        "summary": _snapshot_return_metrics(rows),
+        "breakdown": {
+            key: _snapshot_return_metrics(group)
+            for key, group in horizon_groups.items()
+        },
+    }
+
+
+@app.get("/api/ai-backtest/historical")
+@app.get("/ai-backtest/historical")
+def ai_backtest_historical(
+    horizon: int = Query(14, ge=7, le=30),
+    limit: int = Query(500, ge=10, le=5000),
+    initial_capital: float = Query(100000.0, gt=0),
+):
+    if not HAS_BACKTEST_ENGINE:
+        raise HTTPException(status_code=503, detail="Backtesting engine unavailable")
+
+    target_horizon = _normalize_holding_period_days(horizon)
+    normalized_limit = _coerce_int_query_value(limit, 500)
+    with SessionLocal() as db:
+        _close_due_ai_snapshots(db)
+        rows: List[AIRecommendationSnapshot] = (
+            db.query(AIRecommendationSnapshot)
+            .filter(AIRecommendationSnapshot.evaluation_horizon_days == target_horizon)
+            .order_by(AIRecommendationSnapshot.created_at.asc())
+            .limit(normalized_limit)
+            .all()
+        )
+
+    signals = []
+    symbols: List[str] = []
+    signal_dates: List[datetime] = []
+    for row in rows:
+        if not row.created_at:
+            continue
+        recommendation = str(row.recommendation or "HOLD").strip()
+        signals.append({
+            "symbol": row.symbol,
+            "recommendation": recommendation,
+            "timestamp": row.created_at.isoformat(),
+        })
+        signal_dates.append(row.created_at)
+        if row.symbol and row.symbol not in symbols:
+            symbols.append(row.symbol)
+
+    if not signals:
+        return {
+            "ok": True,
+            "horizon": target_horizon,
+            "signals": 0,
+            "status": "insufficient_data",
+            "message": "No historical recommendation snapshots are available yet for this horizon.",
+            "result": None,
+        }
+
+    first_signal_at = min(signal_dates) if signal_dates else None
+    if first_signal_at is None:
+        return {
+            "ok": True,
+            "horizon": target_horizon,
+            "signals": len(signals),
+            "status": "insufficient_data",
+            "message": "Stored snapshots are missing valid timestamps for historical backtesting.",
+            "result": None,
+        }
+
+    price_histories: Dict[str, List[Dict[str, Any]]] = {}
+    usable_symbols: List[str] = []
+    for symbol in symbols:
+        try:
+            history = (get_stock_data(symbol, "all") or {}).get("history", [])
+        except Exception:
+            history = []
+        history = _filter_history_from_signal_date(history, first_signal_at)
+        if history:
+            price_histories[symbol] = history
+            usable_symbols.append(symbol)
+
+    benchmark_history = _filter_history_from_signal_date((get_stock_data("SPY", "all") or {}).get("history", []), first_signal_at)
+    usable_signals = [item for item in signals if item.get("symbol") in set(usable_symbols)]
+    if not usable_signals or not benchmark_history:
+        return {
+            "ok": True,
+            "horizon": target_horizon,
+            "signals": len(signals),
+            "status": "insufficient_data",
+            "message": "Historical prices after the stored signal dates are not yet sufficient to compute a backtest result.",
+            "result": None,
+        }
+
+    try:
+        result = run_backtest(
+            price_histories=price_histories,
+            signals=usable_signals,
+            benchmark_history=benchmark_history,
+            initial_capital=initial_capital,
+        )
+        return {
+            "ok": True,
+            "horizon": target_horizon,
+            "signals": len(usable_signals),
+            "status": "ready",
+            "message": "Historical backtest computed from stored recommendation snapshots.",
+            "result": result.to_dict(),
+        }
+    except Exception as exc:
+        return {
+            "ok": True,
+            "horizon": target_horizon,
+            "signals": len(usable_signals),
+            "status": "insufficient_data",
+            "message": str(exc),
+            "result": None,
+        }
 
 
 @app.get("/portfolio/overview")
